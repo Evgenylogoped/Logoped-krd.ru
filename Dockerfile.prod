@@ -1,32 +1,31 @@
 # syntax=docker/dockerfile:1.7
 ARG NODE_VERSION=18.20.4-bullseye-slim
 
+# 1) deps: ставим и prod, и dev (НЕ ставим NODE_ENV=production здесь)
 FROM node:${NODE_VERSION} AS deps
 WORKDIR /app
-ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1
+ENV NEXT_TELEMETRY_DISABLED=1
 COPY package*.json ./
+# npm ci без production, чтобы установить devDependencies (прisma CLI)
 RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
 
+# 2) builder: генерируем Prisma Client и собираем Next
 FROM node:${NODE_VERSION} AS builder
 WORKDIR /app
-# PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING - чтобы не падать на проверке чексум
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1
-
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-
-# Генерация Prisma Client до сборки Next
+# Нужно до билда Next, если Prisma импортируется при сборке
 RUN npx prisma generate
-
-# Страховка для нативных модулей
+# Перестраховка для нативных модулей
 RUN npm rebuild sharp --unsafe-perm || true \
  && npm rebuild lightningcss --unsafe-perm || true
-
-# Стабильность CSS
+# Отключаем дорогие оптимизации (см. next.config.js)
 RUN NEXT_DISABLE_OPTIMIZED_CSS=1 npm run build
 
+# 3) runner: минимальный рантайм
 FROM node:${NODE_VERSION} AS runner
 WORKDIR /app
 ENV NODE_ENV=production \
@@ -37,5 +36,5 @@ COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/prisma ./prisma
 COPY package*.json ./
-# В рантайме оставляем мягкую генерацию на случай отличий схемы БД
+# Мягкая гарантия на случай отличий схемы БД в рантайме
 CMD ["sh","-lc","npx prisma generate || true; npm start"]
