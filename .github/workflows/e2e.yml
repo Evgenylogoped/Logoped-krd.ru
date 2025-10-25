@@ -16,22 +16,24 @@ jobs:
     services:
       postgres:
         image: postgres:15-alpine
-        ports:
-          - 5432:5432
+        # Порты наружу не пробрасываем — обращаемся по имени сервиса 'postgres'
+        # ports:
+        #   - 5432:5432
         env:
           POSTGRES_USER: app
           POSTGRES_PASSWORD: app
           POSTGRES_DB: logoped
         options: >-
           --health-cmd="pg_isready -U app -d logoped" \
-          --health-interval=5s --health-timeout=5s --health-retries=10
+          --health-interval=5s --health-timeout=5s --health-retries=30 \
+          --health-start-period=30s
 
     env:
       NODE_ENV: test
       NEXTAUTH_URL: http://localhost:3000
       NEXTAUTH_SECRET: e2e-e2e-secret
       ENABLE_TEST_LOGIN: '1'
-      DATABASE_URL: postgresql://app:app@localhost:5432/logoped?schema=public
+      DATABASE_URL: postgresql://app:app@postgres:5432/logoped?schema=public
       CI: 'true'
 
     steps:
@@ -50,11 +52,19 @@ jobs:
       - name: Generate Prisma Client
         run: npx prisma generate
 
+      - name: Wait for Postgres
+        run: |
+          for i in {1..60}; do
+            if npx prisma db pull >/dev/null 2>&1; then echo "DB ready"; break; fi
+            echo "waiting for DB..."; sleep 2;
+          done
+
       - name: Run DB migrations
         run: npx prisma migrate deploy
 
       - name: Seed E2E data
-        run: node prisma/seed-e2e.cjs
+        run: |
+          if [ -f prisma/seed-e2e.cjs ]; then node prisma/seed-e2e.cjs; else echo "skip seed-e2e"; fi
 
       - name: Install Playwright Browsers
         run: npx playwright install --with-deps
