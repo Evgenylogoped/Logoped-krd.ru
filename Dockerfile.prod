@@ -9,18 +9,33 @@ RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
 
 FROM node:${NODE_VERSION} AS builder
 WORKDIR /app
-ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1
+# PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING - чтобы не падать на проверке чексум
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1
+
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-RUN npm rebuild sharp --unsafe-perm || true && npm rebuild lightningcss --unsafe-perm || true
+
+# Генерация Prisma Client до сборки Next
+RUN npx prisma generate
+
+# Страховка для нативных модулей
+RUN npm rebuild sharp --unsafe-perm || true \
+ && npm rebuild lightningcss --unsafe-perm || true
+
+# Стабильность CSS
 RUN NEXT_DISABLE_OPTIMIZED_CSS=1 npm run build
 
 FROM node:${NODE_VERSION} AS runner
 WORKDIR /app
-ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 TZ=Europe/Moscow
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    TZ=Europe/Moscow
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/prisma ./prisma
 COPY package*.json ./
+# В рантайме оставляем мягкую генерацию на случай отличий схемы БД
 CMD ["sh","-lc","npx prisma generate || true; npm start"]
