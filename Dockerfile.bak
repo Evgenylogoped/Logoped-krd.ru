@@ -1,0 +1,32 @@
+FROM node:18-alpine AS deps
+WORKDIR /app
+RUN apk add --no-cache libc6-compat openssl
+COPY package*.json ./
+RUN npm ci --no-audit --no-fund
+
+FROM node:18-alpine AS builder
+WORKDIR /app
+RUN apk add --no-cache libc6-compat openssl
+COPY --from=deps /app/node_modules ./node_modules
+COPY package*.json ./
+# Copy only prisma first to run generate
+COPY prisma ./prisma
+# Provide env so prisma generate doesn't fail on missing .env
+ENV DATABASE_URL=postgresql://app:secure_db_password_123@db:5432/logoped?schema=public
+RUN npx prisma generate
+# Now copy the rest of the app
+COPY . .
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN npm run build
+
+FROM node:18-alpine AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+RUN apk add --no-cache libc6-compat openssl
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/next.config.js ./
+COPY --from=builder /app/package*.json ./
+COPY --from=builder /app/.next ./.next
+COPY --from=builder /app/public ./public
+EXPOSE 3000
+CMD ["npm","start"]

@@ -1,0 +1,472 @@
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import Link from 'next/link'
+import crypto from 'crypto'
+import ParentPassword from '@/components/ParentPassword'
+import LogopedPreviewTrigger from '@/components/LogopedPreview'
+import { archiveChild, restoreChild, approveActivation, rejectActivation, createParentAndChild, createChildForExistingParent, attachExistingChildToMe, searchParent, transferChildInsideOrg, requestTransferByEmail, approveTransferRequest, rejectTransferRequest, regenerateParentPassword } from './actions'
+import { startChat } from '../../../chat/actions'
+import { getOrCreateConversation } from '../../../chat/chatService'
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+
+export default async function LogopedClientsPage({ searchParams }: { searchParams: Promise<{ tab?: string; q?: string; search?: string; op?: string; child?: string; parent?: string; activation?: string; archived?: string; restored?: string; transfer?: string }> }) {
+  const sp = await searchParams
+  const session = await getServerSession(authOptions)
+  const role = (session?.user as any)?.role
+  if (!session || !['LOGOPED','ADMIN','SUPER_ADMIN'].includes(role)) return <div>Доступ запрещён</div>
+
+  const currentLogopedId = (session.user as any).id as string
+  const tab = sp?.tab || 'active'
+  const q = (sp?.q || '').trim()
+  const activationState = sp?.activation
+  const archivedState = sp?.archived
+  const restoredState = sp?.restored
+  const opState = sp?.op
+  const transferState = sp?.transfer
+  const searchEmail = sp?.search ? String(sp.search).toLowerCase().trim() : ''
+  const childQuery = sp?.child ? String(sp.child).trim() : ''
+  const parentQuery = sp?.parent ? String(sp.parent).trim() : ''
+
+  const activationRequests = await (prisma as any).activationRequest.findMany({
+    where: { targetLogopedId: currentLogopedId, status: 'PENDING' },
+    include: { parent: { include: { user: true, children: true } } },
+    orderBy: { createdAt: 'desc' },
+  })
+
+  
+
+  // Поиск существующего родителя по email (если задан searchEmail)
+  let foundParent: any = null
+  if (searchEmail) {
+    const user = await (prisma as any).user.findUnique({ where: { email: searchEmail } })
+    if (user && user.role === 'PARENT') {
+      foundParent = await (prisma as any).parent.findUnique({ where: { userId: user.id }, include: { user: true, children: true } })
+    }
+  }
+
+  // Историю заявок перенесли в Центр уведомлений
+
+  // Активные: только ваши и не в архиве
+  const active = await (prisma as any).child.findMany({
+    where: { logopedId: currentLogopedId, isArchived: false },
+    orderBy: [{ lastName: 'asc' }],
+    include: { parent: { include: { user: true } } },
+  })
+  // Логопеды моей организации (для трансфера внутри орг)
+  const me = await (prisma as any).user.findUnique({ where: { id: currentLogopedId }, include: { branch: { include: { company: true } } } })
+  const companyId = me?.branch?.companyId || null
+  const orgLogopeds = companyId ? await (prisma as any).user.findMany({ where: { role: 'LOGOPED', id: { not: currentLogopedId }, branch: { companyId } }, orderBy: { name: 'asc' } }) : []
+  // Входящие заявки на передачу ребёнка (для принятия из раздела Клиенты)
+  const incomingTransfers = await ((prisma as any).transferRequest?.findMany
+    ? (prisma as any).transferRequest.findMany({ where: { toLogopedId: currentLogopedId, status: 'PENDING' }, orderBy: { createdAt: 'desc' } })
+    : Promise.resolve([])) as any[]
+  const getAge = (birthDate?: string | Date | null) => {
+    if (!birthDate) return null
+    const d = new Date(birthDate as any)
+    if (isNaN(d.getTime())) return null
+    const now = new Date()
+    let age = now.getFullYear() - d.getFullYear()
+    const m = now.getMonth() - d.getMonth()
+    if (m < 0 || (m === 0 && now.getDate() < d.getDate())) age--
+    return age
+  }
+  const decryptVisiblePassword = (enc?: string | null): string | null => {
+    try {
+      if (!enc) return null
+      if (enc.startsWith('plain:')) {
+        const b64 = enc.slice(6)
+        return Buffer.from(b64, 'base64').toString('utf8')
+      }
+      const rawKey = process.env.PARENT_PWD_KEY || ''
+      if (!rawKey) return null
+      const buf = Buffer.from(enc, 'base64')
+      if (buf.length < 12 + 16 + 1) return null
+      const iv = buf.subarray(0, 12)
+      const tag = buf.subarray(12, 28)
+      const data = buf.subarray(28)
+      const key = Buffer.from(rawKey.padEnd(32, '0').slice(0, 32))
+      const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv)
+      decipher.setAuthTag(tag)
+      const dec = Buffer.concat([decipher.update(data), decipher.final()])
+      return dec.toString('utf8')
+    } catch {
+      return null
+    }
+  }
+  let activeFiltered = active as any[]
+  if (childQuery) {
+    activeFiltered = activeFiltered.filter(c => String(c.lastName || '').toLowerCase().includes(childQuery.toLowerCase()))
+  }
+  if (parentQuery) {
+    const ql = parentQuery.toLowerCase()
+    activeFiltered = activeFiltered.filter(c => {
+      const n = String(c.parent?.user?.name || '').toLowerCase()
+      const e = String(c.parent?.user?.email || '').toLowerCase()
+      const fn = String(c.parent?.fullName || '').toLowerCase()
+      return n.includes(ql) || e.includes(ql) || fn.includes(ql)
+    })
+  }
+
+  // Архив: по запросу ФИО родителя (fullName или имя пользователя), виден всем логопедам
+  const archived = await (prisma as any).child.findMany({
+    where: {
+      isArchived: true,
+      parent: {
+        isArchived: true,
+        ...(q ? { OR: [
+          { fullName: { contains: q, mode: 'insensitive' } },
+          { user: { name: { contains: q, mode: 'insensitive' } } },
+          { user: { email: { contains: q, mode: 'insensitive' } } },
+        ] } : {}),
+      },
+    },
+    orderBy: [{ lastName: 'asc' }],
+    include: { parent: { include: { user: true } } },
+  })
+
+  // Подготовим convId для быстрых ссылок в чат (чтобы не использовать /chat?to=...)
+  const convByActiveChild: Record<string, string> = {}
+  const convByArchivedParent: Record<string, string> = {}
+  // active children → conversation with their parent
+  for (const ch of active as any[]) {
+    const parentUserId = ch.parent?.user?.id
+    if (parentUserId) {
+      const conv = await getOrCreateConversation(currentLogopedId, String(parentUserId), String(ch.id))
+      if (conv?.id) convByActiveChild[String(ch.id)] = String(conv.id)
+    }
+  }
+  // archived children → generic conversation with parent
+  for (const ch of archived as any[]) {
+    const parentUserId = ch.parent?.user?.id
+    if (parentUserId && !convByArchivedParent[parentUserId]) {
+      const conv = await getOrCreateConversation(currentLogopedId, String(parentUserId))
+      if (conv?.id) convByArchivedParent[parentUserId] = String(conv.id)
+    }
+  }
+
+  return (
+    <div className="container space-y-6 py-6">
+      {(activationState || archivedState || restoredState || opState || transferState) && (
+        <div className="rounded border p-3 bg-emerald-50 text-emerald-800">
+          {activationState==='approved' && <div>Заявка на активацию — одобрена.</div>}
+          {activationState==='rejected' && <div className="text-amber-800">Заявка на активацию — отклонена.</div>}
+          {archivedState && <div>Карточка перемещена в архив.</div>}
+          {restoredState && <div>Карточка восстановлена из архива.</div>}
+          {opState==='created' && <div>Создан новый родитель и ребёнок.</div>}
+          {opState==='child_created' && <div>Создана карточка ребёнка для существующего родителя.</div>}
+          {opState==='attached' && <div>Ребёнок прикреплён к вам.</div>}
+          {transferState==='done' && <div>Передача внутри организации выполнена.</div>}
+          {transferState==='requested' && <div>Запрос на трансфер по email отправлен.</div>}
+          {transferState==='approved' && <div>Трансфер подтверждён.</div>}
+        </div>
+      )}
+
+      
+
+      
+
+      
+
+      
+
+      
+
+      {/* История заявок перенесена в «Уведомления» */}
+      <div className="flex gap-2">
+        <a href="?tab=active" className={`btn text-sm ${tab==='active'?'btn-secondary':''}`}>Активные</a>
+        <a href="?tab=archive" className={`btn text-sm ${tab==='archive'?'btn-secondary':''}`}>Архив</a>
+      </div>
+
+      {(activationRequests.length > 0 || incomingTransfers.length > 0) && (
+        <section className="section">
+          <h2 className="mb-3 text-lg font-semibold">Запросы</h2>
+          <div className="space-y-2">
+            {incomingTransfers.length > 0 && (
+              <div className="rounded border p-3" style={{ background: 'var(--card-bg)' }}>
+                <div className="font-medium mb-2">Передачи детей</div>
+                <div className="space-y-2">
+                  {incomingTransfers.map((r:any)=> (
+                    <div key={r.id} className="flex items-center justify-between p-2 rounded-md border">
+                      <div className="text-sm">
+                        <div className="font-medium">Ребёнок ID: {r.childId}</div>
+                        <div className="text-xs text-muted">От логопеда ID: {r.fromLogopedId} · {new Date(r.createdAt).toLocaleString('ru-RU')}</div>
+                      </div>
+                      <div className="flex gap-2">
+                        <form action={approveTransferRequest}>
+                          <input type="hidden" name="requestId" value={r.id} />
+                          <button className="btn btn-secondary btn-sm">Принять</button>
+                        </form>
+                        <form action={rejectTransferRequest}>
+                          <input type="hidden" name="requestId" value={r.id} />
+                          <button className="btn btn-danger btn-sm">Отклонить</button>
+                        </form>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {activationRequests.length > 0 && (
+              <div className="rounded border p-3" style={{ background: 'var(--card-bg)' }}>
+                <h3 className="font-medium mb-2">Запросы на активацию</h3>
+                <div className="space-y-2">
+                  {activationRequests.map((r: any) => (
+                    <div key={r.id} className="flex flex-col gap-2 p-3 rounded-md border shadow-sm sm:flex-row sm:items-center sm:justify-between" style={{ background: 'var(--card-bg)' }}>
+                      <div>
+                        <div className="font-medium">{r.parent.user.name || r.parent.user.email}</div>
+                        <div className="text-sm text-muted">Детей: {r.parent.children.length}</div>
+                        {r.note && <div className="text-xs text-muted mt-1">Сообщение: {r.note}</div>}
+                      </div>
+                      <div className="flex gap-2">
+                        <form action={approveActivation}>
+                          <input type="hidden" name="requestId" value={r.id} />
+                          <button className="btn btn-secondary text-sm">Принять</button>
+                        </form>
+                        <form action={rejectActivation}>
+                          <input type="hidden" name="requestId" value={r.id} />
+                          <button className="btn btn-danger text-sm">Отклонить</button>
+                        </form>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
+
+      
+
+
+      
+
+      
+
+      
+
+      {tab==='active' && (
+        <section className="section">
+          <h2 className="mb-3 text-lg font-semibold">Активные</h2>
+          <div className="mb-3 flex items-end justify-between gap-2">
+            <form method="get" className="flex items-end gap-2">
+              <input type="hidden" name="tab" value="active" />
+              <div>
+                <label className="block text-sm mb-1">Поиск по фамилии ребёнка</label>
+                <input name="child" defaultValue={childQuery} className="input" placeholder="Например: Иванов" />
+              </div>
+              <div>
+                <label className="block text-sm mb-1">Поиск по родителю (ФИО / email)</label>
+                <input name="parent" defaultValue={parentQuery} className="input" placeholder="Например: Петрова / user@mail.ru" />
+              </div>
+              <button className="btn">Искать</button>
+            </form>
+            <a href="/logoped/clients/export" className="btn btn-secondary">Экспорт CSV</a>
+          </div>
+          <div className="space-y-2">
+            {activeFiltered.length === 0 && <div className="text-sm text-muted">Ничего не найдено</div>}
+            {activeFiltered.map((ch: any) => (
+              <div key={ch.id} className="flex flex-col sm:flex-row sm:items-start sm:justify-between p-3 gap-4 rounded-md border shadow-sm hover:bg-gray-50" style={{ background: 'var(--card-bg)' }}>
+                <div className="flex items-start gap-3">
+                  <LogopedPreviewTrigger name={`${ch.lastName} ${ch.firstName}`} image={ch.photoUrl} subtitleLines={[getAge(ch.birthDate)!=null?`Возраст: ${getAge(ch.birthDate)} лет`:'']} actionHref={`/chat/${convByActiveChild[ch.id] || ''}`} actionLabel="Написать">
+                    {ch.photoUrl ? (
+                      <img src={ch.photoUrl} alt={ch.firstName} className="h-12 w-12 rounded-md object-cover" />
+                    ) : (
+                      <div className="h-12 w-12 rounded-md bg-gray-200 text-[10px] text-muted flex items-center justify-center">Нет фото</div>
+                    )}
+                  </LogopedPreviewTrigger>
+                  <div>
+                    <LogopedPreviewTrigger name={`${ch.lastName} ${ch.firstName}`} image={ch.photoUrl} subtitleLines={[getAge(ch.birthDate)!=null?`Возраст: ${getAge(ch.birthDate)} лет`:'']} actionHref={`/chat/${convByActiveChild[ch.id] || ''}`} actionLabel="Написать">
+                      <div className="font-medium cursor-pointer">{ch.lastName} {ch.firstName}</div>
+                    </LogopedPreviewTrigger>
+                    <div className="text-sm text-muted">
+                      Родитель: {' '}
+                      <LogopedPreviewTrigger name={(ch.parent as any).fullName || ch.parent.user.name || ch.parent.user.email} image={(ch.parent.user as any)?.image} phone={(ch.parent as any)?.phone} phone={(ch.parent as any)?.phone} subtitleLines={[((ch.parent as any)?.phone ? `Телефон: ${(ch.parent as any).phone}` : '')]} actionHref={`/chat/${convByActiveChild[ch.id] || ''}`} actionLabel="Написать">
+                        <span className="underline cursor-pointer truncate max-w-[180px] inline-block align-bottom" title={(ch.parent as any).fullName || ch.parent.user.name || ch.parent.user.email}>{(ch.parent as any).fullName || ch.parent.user.name || ''}</span>
+                      </LogopedPreviewTrigger>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex flex-col sm:items-end gap-2 sm:min-w-[320px] w-full">
+                  <div className="grid grid-cols-2 sm:flex sm:flex-row gap-2 w-full sm:w-auto">
+                    <Link className="btn btn-sm w-full sm:w-auto" href={`/logoped/child/${ch.id}`}>📄 Открыть</Link>
+                    <form action={archiveChild}>
+                      <input type="hidden" name="childId" value={ch.id} />
+                      <button className="btn btn-danger btn-sm w-full sm:w-auto">🗂️ В архив</button>
+                    </form>
+                    <Link href={`/chat/${convByActiveChild[ch.id] || ''}`} className="btn btn-sm w-full sm:w-auto">💬 Написать</Link>
+                  </div>
+                  {/* Убрано: добавление ещё одного ребёнка дублируется в настройках */}
+                  {/* Передача ребёнка */}
+                  <details className="w-full">
+                    <summary className="text-xs text-muted cursor-pointer">Передача ребёнка</summary>
+                    <div className="mt-2 grid gap-3">
+                      <form action={transferChildInsideOrg} className="flex items-end gap-2">
+                        <input type="hidden" name="childId" value={ch.id} />
+                        <label className="grid gap-1">
+                          <span className="text-xs">Логопед организации</span>
+                          <select name="toLogopedId" className="input !py-2 !px-2" disabled={!companyId}>
+                            {orgLogopeds.map((u:any)=> (
+                              <option key={u.id} value={u.id}>{u.name || u.email}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <button className="btn btn-secondary btn-sm" disabled={!companyId || orgLogopeds.length===0}>Передать</button>
+                      </form>
+                      <form action={requestTransferByEmail} className="flex items-end gap-2">
+                        <input type="hidden" name="childId" value={ch.id} />
+                        <label className="grid gap-1">
+                          <span className="text-xs">E-mail логопеда (в т.ч. другая организация)</span>
+                          <input name="email" type="email" className="input" placeholder="logoped@domain.ru" required />
+                        </label>
+                        <button className="btn btn-primary btn-sm">Запросить трансфер</button>
+                      </form>
+                    </div>
+                  </details>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {tab==='archive' && (
+        <section className="section">
+          <div className="mb-3 flex items-end justify-between gap-2">
+            <h2 className="text-lg font-semibold">Архив</h2>
+            <form method="get" className="flex items-end gap-2">
+              <input type="hidden" name="tab" value="archive" />
+              <div>
+                <label className="block text-sm mb-1">Поиск по ФИО/email родителя</label>
+                <input name="q" defaultValue={q} className="input" placeholder="Например: Иванова Анна" />
+              </div>
+              <button className="btn">Искать</button>
+            </form>
+          </div>
+          <div className="space-y-2">
+            {archived.length === 0 && <div className="text-sm text-muted">В архиве ничего не найдено</div>}
+            {archived.map((ch: any) => (
+              <div key={ch.id} className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-3 gap-3 rounded-md border shadow-sm" style={{ background: 'var(--card-bg)' }}>
+                <div className="flex items-center gap-3">
+                  <LogopedPreviewTrigger name={`${ch.lastName} ${ch.firstName}`} image={ch.photoUrl} subtitleLines={[getAge(ch.birthDate)!=null?`Возраст: ${getAge(ch.birthDate)} лет`:'']} actionHref={`/chat/${convByArchivedParent[ch.parent.user.id] || ''}`} actionLabel="Написать">
+                    {ch.photoUrl ? (
+                      <img src={ch.photoUrl} alt={ch.firstName} className="h-10 w-10 rounded-md object-cover" />
+                    ) : (
+                      <div className="h-10 w-10 rounded-md bg-gray-200 text-[10px] text-muted flex items-center justify-center">Нет фото</div>
+                    )}
+                  </LogopedPreviewTrigger>
+                  <div>
+                    <LogopedPreviewTrigger name={`${ch.lastName} ${ch.firstName}`} image={ch.photoUrl} subtitleLines={[getAge(ch.birthDate)!=null?`Возраст: ${getAge(ch.birthDate)} лет`:'']} actionHref={`/chat/${convByArchivedParent[ch.parent.user.id] || ''}`} actionLabel="Написать">
+                      <div className="font-medium cursor-pointer">{ch.lastName} {ch.firstName}</div>
+                    </LogopedPreviewTrigger>
+                    <div className="text-sm text-muted">
+                      Родитель: {' '}
+                      <LogopedPreviewTrigger name={(ch.parent as any).fullName || ch.parent.user.name || ch.parent.user.email} image={(ch.parent.user as any)?.image} phone={(ch.parent as any)?.phone} phone={(ch.parent as any)?.phone} subtitleLines={[((ch.parent as any)?.phone ? `Телефон: ${(ch.parent as any).phone}` : '')]} actionHref={`/chat/${convByArchivedParent[ch.parent.user.id] || ''}`} actionLabel="Написать">
+                        <span className="underline cursor-pointer truncate max-w-[180px] inline-block align-bottom" title={(ch.parent as any).fullName || ch.parent.user.name || ch.parent.user.email}>{(ch.parent as any).fullName || ch.parent.user.name || ''}</span>
+                      </LogopedPreviewTrigger>
+                    </div>
+                  </div>
+                </div>
+                <div className="w-full sm:w-auto">
+                  <div className="grid grid-cols-2 sm:flex sm:flex-row gap-2 w-full sm:w-auto">
+                    <form action={restoreChild} className="col-span-2 sm:col-span-1">
+                      <input type="hidden" name="childId" value={ch.id} />
+                      <button className="btn btn-secondary btn-sm w-full sm:w-auto">↩️ Восстановить</button>
+                    </form>
+                    <Link href={`/chat/${convByArchivedParent[ch.parent.user.id] || ''}`} className="btn btn-sm w-full sm:w-auto">💬 Написать</Link>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+      {/* Быстрые действия: создать родителя+ребёнка, найти существующего родителя */}
+      <section className="section">
+        <h2 className="mb-3 text-lg font-semibold">Добавить клиента</h2>
+        <div className="grid gap-6 lg:grid-cols-2">
+          <div className="rounded border p-3" style={{ background: 'var(--card-bg)' }}>
+            <h3 className="font-medium mb-2">Создать нового родителя и ребёнка</h3>
+            <form action={createParentAndChild} className="grid gap-2">
+              <div className="grid sm:grid-cols-2 gap-2">
+                <input name="email" type="email" className="input" placeholder="E-mail родителя" required />
+                <input name="phone" className="input" placeholder="Телефон (опц.)" />
+              </div>
+              <input name="fullName" className="input" placeholder="ФИО родителя (опц.)" />
+              <div className="grid sm:grid-cols-2 gap-2">
+                <input name="childLastName" className="input" placeholder="Фамилия ребёнка" required />
+                <input name="childFirstName" className="input" placeholder="Имя ребёнка" required />
+              </div>
+              <button className="btn btn-primary">Создать</button>
+            </form>
+          </div>
+          <div className="rounded border p-3" style={{ background: 'var(--card-bg)' }}>
+            <h3 className="font-medium mb-2">Найти существующего родителя</h3>
+            <form action={searchParent} className="flex gap-2">
+              <input name="email" type="email" defaultValue={searchEmail} className="input" placeholder="E-mail родителя" required />
+              <button className="btn">Найти</button>
+            </form>
+            {searchEmail && (
+              <div className="mt-3 text-sm">
+                <div className="text-muted">Результаты для: {searchEmail}</div>
+                {!foundParent && <div className="text-amber-700">Родитель не найден</div>}
+                {foundParent && (
+                  <div className="mt-3 space-y-3">
+                    <div className="font-medium">{foundParent.fullName || foundParent.user.name || foundParent.user.email}</div>
+                    <div className="text-xs text-muted">Статус: {foundParent.isArchived ? 'в архиве' : 'активен'}</div>
+                    <div className="rounded border p-2">
+                      <div className="text-sm font-medium mb-2">Создать карточку ребёнка</div>
+                      <form action={createChildForExistingParent} className="grid gap-2">
+                        <input type="hidden" name="email" value={foundParent.user.email} />
+                        <div className="grid sm:grid-cols-2 gap-2">
+                          <input name="childLastName" className="input" placeholder="Фамилия ребёнка" required />
+                          <input name="childFirstName" className="input" placeholder="Имя ребёнка" required />
+                        </div>
+                        <button className="btn btn-secondary">Создать карточку</button>
+                      </form>
+                    </div>
+                    <div className="rounded border p-2">
+                      <div className="text-sm font-medium mb-2">Дети родителя</div>
+                      <div className="space-y-2">
+                        {foundParent.children.length === 0 && (
+                          <div className="text-xs text-muted py-1">У родителя пока нет детей</div>
+                        )}
+                        {foundParent.children.map((c: any) => (
+                          <div key={c.id} className="flex items-center justify-between p-3 text-sm rounded-md border shadow-sm" style={{ background: 'var(--card-bg)' }}>
+                            <div>
+                              <div className="font-medium">{c.lastName} {c.firstName}</div>
+                              <div className="text-xs text-muted">{c.isArchived ? 'В архиве' : 'Активен'} · {c.logopedId ? (c.logopedId===currentLogopedId ? 'Ваш клиент' : 'Прикреплён к другому логопеду') : 'Без логопеда'}</div>
+                            </div>
+                            <div>
+                              <div className="flex gap-2">
+                                {(!c.logopedId || c.logopedId!==currentLogopedId) && (
+                                  <form action={attachExistingChildToMe}>
+                                    <input type="hidden" name="childId" value={c.id} />
+                                    <button className="btn btn-sm">Прикрепить</button>
+                                  </form>
+                                )}
+                                <form action={startChat}>
+                                  <input type="hidden" name="targetUserId" value={foundParent.user.id} />
+                                  <button className="btn btn-sm">Написать</button>
+                                </form>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
+
+    </div>
+  )
+
+}

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="1600" viewBox="0 0 900 1600">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#fff7ed"/>
+      <stop offset="100%" stop-color="#ffedd5"/>
+    </linearGradient>
+  </defs>
+  <rect width="900" height="1600" fill="url(#g)"/>
+  <rect x="60" y="80" width="780" height="1440" rx="24" fill="#ffffff" stroke="#e5e7eb"/>
+  <text x="90" y="150" font-family="Inter, ui-sans-serif, system-ui" font-size="36" font-weight="800" fill="#111827">Орг. финансы (выплаты)</text>
+  <g>
+    <rect x="90" y="220" width="720" height="72" rx="12" fill="#f3f4f6"/>
+    <rect x="90" y="302" width="720" height="72" rx="12" fill="#f3f4f6"/>
+    <rect x="90" y="384" width="720" height="72" rx="12" fill="#f3f4f6"/>
+    <text x="110" y="268" font-size="22" font-family="Inter" fill="#111827">PENDING • Сумма: 12 500 ₽</text>
+    <text x="110" y="350" font-size="22" font-family="Inter" fill="#111827">PENDING • Сумма: 7 100 ₽</text>
+  </g>
+  <rect x="90" y="500" width="300" height="56" rx="12" fill="#4f46e5"/>
+  <text x="240" y="536" text-anchor="middle" font-family="Inter" font-size="22" font-weight="700" fill="#ffffff">Подтвердить</text>
+</svg>

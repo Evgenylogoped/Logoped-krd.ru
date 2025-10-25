@@ -1,0 +1,688 @@
+"use server"
+import { revalidatePath } from 'next/cache'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { sendMail } from '@/lib/mail'
+import { redirect } from 'next/navigation'
+
+function ensureLogoped(session: unknown): asserts session is { user: { role?: string; id?: string } } {
+  const s = session as { user?: { role?: string; id?: string } } | null
+  const role = s?.user?.role
+  if (!s || !['ADMIN','SUPER_ADMIN','LOGOPED'].includes(String(role))) throw new Error('Forbidden')
+}
+
+export async function approveParentBooking(formData: FormData): Promise<void> {
+  const session = await getServerSession(authOptions)
+  ensureLogoped(session)
+  const userId = String(session.user.id || '')
+  const bookingId = String(formData.get('bookingId') || '')
+  if (!bookingId) return
+  const booking = await prisma.booking.findUnique({ where: { id: bookingId }, include: { lesson: true } })
+  if (!booking || booking.status !== 'ACTIVE') { revalidatePath('/logoped/schedule'); return }
+  if (booking.lesson?.logopedId !== userId) { revalidatePath('/logoped/schedule'); return }
+  // Проверка пересечений: нет ли уже ENROLLED на этот урок
+  // Если в брони нет childId, просто считаем бронирование закрытым (без автозаписи)
+  if (!booking.childId) {
+    await prisma.booking.update({ where: { id: booking.id }, data: { status: 'CANCELLED', liquidatedAt: new Date() } })
+    revalidatePath('/logoped/schedule')
+    return
+  }
+  const hasEnroll = await prisma.enrollment.findUnique({ where: { childId_lessonId: { childId: booking.childId, lessonId: booking.lessonId } } })
+  if (!hasEnroll) {
+    await prisma.$transaction([
+      prisma.enrollment.create({ data: { childId: booking.childId, lessonId: booking.lessonId, status: 'ENROLLED' } }),
+      prisma.booking.update({ where: { id: booking.id }, data: { status: 'CANCELLED', liquidatedAt: new Date() } }),
+    ])
+  } else {
+    await prisma.booking.update({ where: { id: booking.id }, data: { status: 'CANCELLED', liquidatedAt: new Date() } })
+  }
+  revalidatePath('/logoped/schedule')
+}
+
+export async function rejectParentBooking(formData: FormData): Promise<void> {
+  const session = await getServerSession(authOptions)
+  ensureLogoped(session)
+  const userId = String(session.user.id || '')
+  const bookingId = String(formData.get('bookingId') || '')
+  if (!bookingId) return
+  const booking = await prisma.booking.findUnique({ where: { id: bookingId }, include: { lesson: true } })
+  if (!booking || booking.status !== 'ACTIVE') { revalidatePath('/logoped/schedule'); return }
+  if (booking.lesson?.logopedId !== userId) { revalidatePath('/logoped/schedule'); return }
+  await prisma.booking.update({ where: { id: booking.id }, data: { status: 'CANCELLED', liquidatedAt: new Date() } })
+  revalidatePath('/logoped/schedule')
+}
+
+export async function createConsultationRequest(formData: FormData): Promise<void> {
+  const session = await getServerSession(authOptions)
+  ensureLogoped(session)
+  const supervisorId = String(session.user.id || '')
+  const subordinateId = String(formData.get('subordinateId') || '')
+  const lessonId = String(formData.get('lessonId') || '')
+  const parentEmail = String(formData.get('parentEmail') || '').trim()
+  const childFirstName = String(formData.get('childFirstName') || '').trim()
+  const childLastName = String(formData.get('childLastName') || '').trim()
+  const note = String(formData.get('note') || '').trim() || undefined
+  if (!subordinateId || !lessonId || !parentEmail || !childFirstName || !childLastName) {
+    revalidatePath('/logoped/schedule');
+    redirect('/logoped/schedule?consult=error')
+  }
+  // Проверка прав: Руководитель организации — любой логопед своей компании; Руководитель филиала — логопеды своего филиала.
+  const me = await prisma.user.findUnique({ where: { id: supervisorId }, include: { branch: { include: { company: true } } } })
+  const subordinate = await prisma.user.findUnique({ where: { id: subordinateId }, include: { branch: true } })
+  if (!me || !subordinate || subordinate.role !== 'LOGOPED') {
+    revalidatePath('/logoped/schedule');
+    redirect('/logoped/schedule?consult=error')
+  }
+  const isOrgLeader = Boolean(me?.branch?.company?.ownerId === supervisorId)
+  const isBranchManager = Boolean(me?.branch?.managerId === supervisorId)
+  let allowed = false
+  if (isOrgLeader && me?.branch?.companyId && subordinate?.branchId) {
+    const subBranch = await prisma.branch.findUnique({ where: { id: subordinate.branchId } })
+    allowed = Boolean(subBranch && subBranch.companyId === me.branch.companyId)
+  } else if (isBranchManager && me?.branchId) {
+    allowed = Boolean(subordinate?.branchId === me.branchId)
+  } else {
+    // fallback на старую модель связей Supervisor->Subordinate
+    const rel = await prisma.userSupervisor.findUnique({ where: { supervisorId_subordinateId: { supervisorId, subordinateId } } })
+    allowed = Boolean(rel)
+  }
+  if (!allowed) {
+    revalidatePath('/logoped/schedule');
+    redirect('/logoped/schedule?consult=error')
+  }
+  // check lesson belongs to subordinate and is free (no enrollment, no active booking)
+  const lesson = await prisma.lesson.findUnique({ where: { id: lessonId }, include: { enrolls: true, bookings: true } })
+  if (!lesson || lesson.logopedId !== subordinateId) { revalidatePath('/logoped/schedule'); return }
+  const hasEnroll = (lesson.enrolls?.length ?? 0) > 0
+  const hasActiveBooking = (lesson.bookings || []).some((b: { status?: string } ) => b.status === 'ACTIVE')
+  if (hasEnroll || hasActiveBooking) { revalidatePath('/logoped/schedule'); return }
+  // create request if not exists for this lesson
+  const existing = await prisma.consultationRequest.findFirst({ where: { lessonId, status: 'PENDING' } })
+  if (existing) { revalidatePath('/logoped/schedule'); return }
+
+  // Email уникальность и логика с ребёнком
+  let consultCode: string = 'sent'
+  const emailUser = await prisma.user.findUnique({ where: { email: parentEmail } }).catch(()=>null)
+  if (emailUser && emailUser.role === 'PARENT') {
+    // Найдён родитель — проверяем ребёнка по ФИО у этого родителя
+    const parent = await prisma.parent.findUnique({ where: { userId: emailUser.id } })
+    if (parent) {
+      const sameChild = await prisma.child.findFirst({ where: { parentId: parent.id, lastName: childLastName, firstName: childFirstName } })
+      if (!sameChild) {
+        // Создаём нового ребёнка у найденного родителя (без назначения логопеда)
+        await prisma.child.create({ data: { parentId: parent.id, lastName: childLastName, firstName: childFirstName, isArchived: false } })
+        consultCode = 'sent_existing_parent_child_created'
+      } else {
+        // Ребёнок с таким ФИО уже есть
+        if (sameChild.logopedId && sameChild.logopedId !== subordinateId) {
+          // Закреплён за другим логопедом — отказываем
+          revalidatePath('/logoped/schedule')
+          redirect('/logoped/schedule?consult=child_attached_elsewhere')
+        } else {
+          // Не закреплён или закреплён на этого же (редко) — если в архиве, разархивируем
+          if (sameChild.isArchived) {
+            await prisma.child.update({ where: { id: sameChild.id }, data: { isArchived: false } })
+            // если у родителя архивный — тоже разархивируем
+            await prisma.parent.update({ where: { id: parent.id }, data: { isArchived: false } }).catch(()=>{})
+            consultCode = 'sent_child_unarchived'
+          }
+        }
+      }
+    }
+  }
+
+  await prisma.consultationRequest.create({ data: { supervisorId, subordinateId, lessonId, parentEmail, childFirstName, childLastName, note } })
+  // notify subordinate by email if available
+  if (subordinate?.email) {
+    await sendMail({ to: subordinate.email, subject: 'Запрос консультации', text: `Руководитель отправил запрос консультации на слот ${lessonId} для ребёнка ${childLastName} ${childFirstName}.` })
+  }
+  revalidatePath('/logoped/schedule')
+  redirect(`/logoped/schedule?consult=${consultCode}`)
+}
+
+export async function approveConsultationRequest(formData: FormData): Promise<void> {
+  const session = await getServerSession(authOptions)
+  ensureLogoped(session)
+  const subordinateId = String(session.user.id || '')
+  const requestId = String(formData.get('requestId') || '')
+  if (!requestId) return
+  const req = await prisma.consultationRequest.findUnique({ where: { id: requestId }, include: { lesson: true } })
+  if (!req || req.subordinateId !== subordinateId || req.status !== 'PENDING') { revalidatePath('/logoped/schedule'); return }
+  // Автосоздание/переиспользование карточки ребёнка на основании данных запроса
+  const parentEmail = String(req.parentEmail || '').trim()
+  const childLastName = String(req.childLastName || '').trim()
+  const childFirstName = String(req.childFirstName || '').trim()
+  if (!parentEmail || !childLastName || !childFirstName) { revalidatePath('/logoped/schedule'); redirect('/logoped/schedule?consult=error') }
+  // find or create parent by email
+  let user = await prisma.user.findUnique({ where: { email: parentEmail } })
+  if (!user) {
+    user = await prisma.user.create({ data: { email: parentEmail, role: 'PARENT', passwordHash: '!', emailVerifiedAt: new Date() } })
+  }
+  let parent = await prisma.parent.findUnique({ where: { userId: user.id } })
+  if (!parent) {
+    parent = await prisma.parent.create({ data: { userId: user.id, isArchived: false } })
+      try { const u = await prisma.user.findUnique({ where: { id: user.id }, select: { emailVerifiedAt: true } }); if (!u?.emailVerifiedAt) await prisma.user.update({ where: { id: user.id }, data: { emailVerifiedAt: new Date() } }) } catch {}
+  } else if (parent.isArchived) {
+    await prisma.parent.update({ where: { id: parent.id }, data: { isArchived: false } })
+  }
+  // reuse existing child if found, else create; attach to subordinate
+  let child = await prisma.child.findFirst({ where: { parentId: parent.id, lastName: childLastName, firstName: childFirstName } })
+  if (child) {
+    if (child.logopedId && child.logopedId !== subordinateId) {
+      // Нельзя принять: ребёнок закреплён у другого логопеда
+      revalidatePath('/logoped/schedule')
+      redirect('/logoped/schedule?consult=child_attached_elsewhere')
+    }
+    if (child.isArchived || child.logopedId !== subordinateId) {
+      child = await prisma.child.update({ where: { id: child.id }, data: { isArchived: false, logopedId: subordinateId } })
+    }
+  } else {
+    child = await prisma.child.create({ data: { parentId: parent.id, lastName: childLastName, firstName: childFirstName, logopedId: subordinateId, isArchived: false } })
+  }
+  // enroll to lesson
+  await prisma.enrollment.create({ data: { childId: child.id, lessonId: req.lessonId, status: 'ENROLLED' } })
+  // mark request approved
+  await prisma.consultationRequest.update({ where: { id: requestId }, data: { status: 'APPROVED', respondedAt: new Date() } })
+  // notify supervisor and parent
+  const sup = await prisma.user.findUnique({ where: { id: req.supervisorId } })
+  if (sup?.email) { try { await sendMail({ to: sup.email, subject: 'Заявка на консультацию принята', text: 'Подчинённый принял заявку и создана карточка ребёнка.' }) } catch {} }
+    if (user.email) { try { await sendMail({ to: user.email, subject: 'Создана карточка ребёнка', text: 'Логопед создал карточку и записал на консультацию. Пожалуйста, войдите в личный кабинет.' }) } catch {} }
+    // редирект на карточку ребёнка для возможной правки
+  redirect(`/logoped/child/${child.id}?tab=main&new=1`)
+}
+
+export async function rejectConsultationRequest(formData: FormData): Promise<void> {
+  const session = await getServerSession(authOptions)
+  ensureLogoped(session)
+  const subordinateId = String(session.user.id || '')
+  const requestId = String(formData.get('requestId') || '')
+  if (!requestId) return
+  const req = await prisma.consultationRequest.findUnique({ where: { id: requestId } })
+  if (!req || req.subordinateId !== subordinateId || req.status !== 'PENDING') { revalidatePath('/logoped/schedule'); return }
+  await prisma.consultationRequest.update({ where: { id: requestId }, data: { status: 'REJECTED', respondedAt: new Date() } })
+  try {
+    const sup2 = await prisma.user.findUnique({ where: { id: req.supervisorId } })
+    if (sup2?.email) { await sendMail({ to: sup2.email, subject: 'Заявка на консультацию отклонена', text: 'Подчинённый отклонил вашу заявку на консультацию.' }) }
+  } catch {}
+  revalidatePath('/logoped/schedule')
+  redirect('/logoped/schedule?consult=rejected')
+}
+
+export async function approveConsultationCreateChild(): Promise<void> {
+  // для совместимости старых форм — теперь логика перенесена в approveConsultationRequest
+  revalidatePath('/logoped/schedule')
+}
+
+export async function updateScheduleSettings(formData: FormData): Promise<void> {
+  const session = await getServerSession(authOptions)
+  ensureLogoped(session)
+  const userId = String(session.user.id || '')
+  const slot = Number(formData.get('scheduleSlotMinutes') || 30)
+  const brk = Number(formData.get('scheduleBreakMinutes') || 0)
+  const preferred = String(formData.get('preferredScheduleView') || '').trim()
+  const data: { scheduleSlotMinutes: number; scheduleBreakMinutes: number; preferredScheduleView?: 'week' | 'month' } = { scheduleSlotMinutes: slot, scheduleBreakMinutes: brk }
+  if (preferred === 'week' || preferred === 'month') data.preferredScheduleView = preferred
+  await prisma.user.update({ where: { id: userId }, data })
+  revalidatePath('/logoped/schedule')
+  revalidatePath('/settings/schedule')
+  redirect('/settings/schedule?saved=1')
+}
+
+export async function extendSlots4Weeks(): Promise<void> {
+  const session = await getServerSession(authOptions)
+  ensureLogoped(session)
+  const userId = String(session.user.id || '')
+  const latest = await prisma.lesson.findFirst({ where: { logopedId: userId }, orderBy: { endsAt: 'desc' } })
+  const base = latest ? new Date(latest.endsAt) : new Date()
+  // next Monday after base
+  const d = new Date(base); d.setDate(d.getDate() + 1)
+  const day = d.getDay() || 7
+  const weekStart = new Date(d); weekStart.setDate(d.getDate() - (day - 1)); weekStart.setHours(0,0,0,0)
+  const endDate = new Date(weekStart); endDate.setDate(endDate.getDate() + 27); endDate.setHours(23,59,59,999)
+
+  const user = await prisma.user.findUnique({ where: { id: userId } })
+  const slot = user?.scheduleSlotMinutes ?? 30
+  const brk = user?.scheduleBreakMinutes ?? 0
+  const group = await ensureDefaultGroup(userId)
+  const templates = await prisma.workTemplate.findMany({ where: { userId } })
+
+  // Шаг 0: привести записи в соответствие новой сетке — только для будущих уроков
+  // Удаляем ENROLLED у уроков, которые ещё не начались и больше не попадают в новую сетку слотов
+  try {
+    const nowLocal = new Date()
+    const futureLessons = await prisma.lesson.findMany({
+      where: {
+        logopedId: userId,
+        startsAt: { gt: nowLocal },
+        endsAt: { lte: endDate },
+      },
+      include: { enrolls: true },
+    })
+    const minutes = (d: Date) => d.getHours() * 60 + d.getMinutes()
+    const alignsToGrid = (l: { startsAt: Date | string; endsAt: Date | string }) => {
+      const dow = (new Date(l.startsAt).getDay() || 7)
+      const dayTemplates = templates.filter(t => t.dayOfWeek === dow)
+      if (dayTemplates.length === 0) return false
+      const sMin = minutes(new Date(l.startsAt))
+      const eMin = minutes(new Date(l.endsAt))
+      const dur = eMin - sMin
+      if (dur !== slot) return false
+      for (const t of dayTemplates) {
+        if (sMin < t.startMinutes || (sMin + slot) > t.endMinutes) continue
+        const step = slot + (brk || 0)
+        const offset = sMin - t.startMinutes
+        if (step === 0) continue
+        if (offset % step === 0) return true
+      }
+      return false
+    }
+    const misaligned = futureLessons.filter(l => (l.enrolls?.length ?? 0) > 0 && !alignsToGrid(l))
+    if (misaligned.length) {
+      await prisma.$transaction(
+        misaligned.map(l => prisma.enrollment.deleteMany({ where: { lessonId: l.id } }))
+      )
+    }
+  } catch {}
+
+  for (let ws = new Date(weekStart); ws <= endDate; ws.setDate(ws.getDate() + 7)) {
+    for (const t of templates) {
+      const dayDate = new Date(ws)
+      dayDate.setDate(ws.getDate() + (t.dayOfWeek - 1))
+      let cursor = new Date(dayDate)
+      cursor.setHours(Math.floor(t.startMinutes/60), t.startMinutes%60, 0, 0)
+      const endDay = new Date(dayDate)
+      endDay.setHours(Math.floor(t.endMinutes/60), t.endMinutes%60, 0, 0)
+      while (cursor < endDay && cursor <= endDate) {
+        const startsAt = new Date(cursor)
+        const endsAt = new Date(startsAt); endsAt.setMinutes(endsAt.getMinutes() + slot)
+        if (endsAt > endDay) break
+        const blockedOverlap = await prisma.blockedTime.findFirst({ where: { userId, startsAt: { lt: endsAt }, endsAt: { gt: startsAt } } })
+        if (!blockedOverlap) {
+          const overlap = await prisma.lesson.findFirst({ where: { logopedId: userId, startsAt: { lt: endsAt }, endsAt: { gt: startsAt } } })
+          if (!overlap) {
+            await prisma.lesson.create({ data: { title: 'Занятие', startsAt, endsAt, groupId: group.id, logopedId: userId } })
+          }
+        }
+        cursor = new Date(endsAt)
+        if (brk) cursor.setMinutes(cursor.getMinutes() + brk)
+      }
+    }
+  }
+  revalidatePath('/logoped/schedule')
+}
+
+export async function addTemplateInterval(formData: FormData): Promise<void> {
+  const session = await getServerSession(authOptions)
+  ensureLogoped(session)
+  const userId = String(session.user.id || '')
+  const dayOfWeek = Number(formData.get('dayOfWeek') || 0)
+  const start = String(formData.get('start') || '') // HH:MM
+  const end = String(formData.get('end') || '')     // HH:MM
+  if (!dayOfWeek || !start || !end) return
+  const [sh, sm] = start.split(':').map(Number)
+  const [eh, em] = end.split(':').map(Number)
+  const sMin = sh * 60 + sm
+  const eMin = eh * 60 + em
+  if (!(sMin < eMin)) {
+    revalidatePath('/settings/schedule/template')
+    redirect('/settings/schedule/template?error=bad_interval')
+  }
+  // Запрет наложений интервалов в рамках одного дня
+  const sameDay = await prisma.workTemplate.findMany({ where: { userId, dayOfWeek } })
+  const overlaps = sameDay.some(t => (sMin < t.endMinutes) && (eMin > t.startMinutes))
+  if (overlaps) {
+    revalidatePath('/settings/schedule/template')
+    redirect('/settings/schedule/template?error=overlap')
+  }
+  await prisma.workTemplate.create({ data: { userId, dayOfWeek, startMinutes: sMin, endMinutes: eMin } })
+  revalidatePath('/logoped/schedule')
+  revalidatePath('/settings/schedule/template')
+  redirect('/settings/schedule/template?saved=1')
+}
+
+export async function deleteTemplateInterval(formData: FormData): Promise<void> {
+  const session = await getServerSession(authOptions)
+  ensureLogoped(session)
+  const id = String(formData.get('id') || '')
+  if (!id) return
+  await prisma.workTemplate.deleteMany({ where: { id } })
+  revalidatePath('/logoped/schedule')
+  revalidatePath('/settings/schedule/template')
+  redirect('/settings/schedule/template?saved=1')
+}
+
+export async function applyTemplateToWeek(formData: FormData): Promise<void> {
+  const session = await getServerSession(authOptions)
+  ensureLogoped(session)
+  const userId = String(session.user.id || '')
+  const weekStartStr = String(formData.get('weekStart') || '')
+  if (!weekStartStr) return
+  const weekStart = new Date(weekStartStr)
+  weekStart.setHours(0,0,0,0)
+  // запрет на применение шаблона к прошедшим неделям
+  const now = new Date()
+  const day = now.getDay() || 7
+  const currentWeekStart = new Date(now)
+  currentWeekStart.setDate(now.getDate() - (day - 1))
+  currentWeekStart.setHours(0,0,0,0)
+  if (weekStart < currentWeekStart) { revalidatePath('/logoped/schedule'); revalidatePath('/settings/schedule/template'); return }
+  const group = await ensureDefaultGroup(userId)
+  const templates = await prisma.workTemplate.findMany({ where: { userId } })
+  const toCreate: { title: string; startsAt: Date; endsAt: Date; groupId: string; logopedId: string }[] = []
+  for (const t of templates) {
+    const d = new Date(weekStart)
+    d.setDate(weekStart.getDate() + (t.dayOfWeek - 1))
+    const sh = Math.floor(t.startMinutes / 60), sm = t.startMinutes % 60
+    const eh = Math.floor(t.endMinutes / 60), em = t.endMinutes % 60
+    const startsAt = new Date(d); startsAt.setHours(sh, sm, 0, 0)
+    const endsAt = new Date(d); endsAt.setHours(eh, em, 0, 0)
+    // skip overlaps with existing lessons/blocked times
+    const overlaps = await prisma.lesson.findFirst({ where: {
+      logopedId: userId,
+      OR: [ { startsAt: { lt: endsAt }, endsAt: { gt: startsAt } } ],
+    } })
+    const blockedOverlap = await prisma.blockedTime.findMany({ where: { userId, OR: [
+      { startsAt: { lt: endsAt }, endsAt: { gt: startsAt } },
+    ] } })
+    if (!overlaps && !blockedOverlap.length) {
+      toCreate.push({ title: 'Занятие', startsAt, endsAt, groupId: group.id, logopedId: userId })
+    }
+  }
+  if (toCreate.length) await prisma.lesson.createMany({ data: toCreate })
+  revalidatePath('/logoped/schedule')
+  revalidatePath('/settings/schedule/template')
+}
+
+export async function addBlockedTime(formData: FormData): Promise<void> {
+  const session = await getServerSession(authOptions)
+  ensureLogoped(session)
+  const userId = String(session.user.id || '')
+  const startsAtStr = String(formData.get('startsAt') || '')
+  const endsAtStr = String(formData.get('endsAt') || '')
+  const reason = String(formData.get('reason') || '').trim() || undefined
+  if (!startsAtStr || !endsAtStr) return
+  await prisma.blockedTime.create({ data: { userId, startsAt: new Date(startsAtStr), endsAt: new Date(endsAtStr), reason } })
+  revalidatePath('/logoped/schedule')
+  revalidatePath('/settings/schedule/blocks')
+  redirect('/settings/schedule/blocks?saved=1')
+}
+
+export async function deleteBlockedTime(formData: FormData): Promise<void> {
+  const session = await getServerSession(authOptions)
+  ensureLogoped(session)
+  const id = String(formData.get('id') || '')
+  if (!id) return
+  await prisma.blockedTime.delete({ where: { id } })
+  revalidatePath('/logoped/schedule')
+  revalidatePath('/settings/schedule/blocks')
+  redirect('/settings/schedule/blocks?saved=1')
+}
+
+async function ensureDefaultGroup(userId: string) {
+  // Сначала пытаемся использовать филиал логопеда
+  const user = await prisma.user.findUnique({ where: { id: userId }, include: { branch: true } })
+  const branchId = user?.branchId || undefined
+  if (branchId) {
+    let group = await prisma.group.findFirst({ where: { branchId } })
+    if (!group) {
+      group = await prisma.group.create({ data: { name: 'General', branchId } })
+    }
+    return group
+  }
+  // Fallback: если у пользователя нет филиала - возвращаем первый попавшийся либо создаём минимальную структуру
+  let group = await prisma.group.findFirst()
+  if (group) return group
+  const company = await prisma.company.create({ data: { name: 'Default Company' } })
+  const branch = await prisma.branch.create({ data: { name: 'Main Branch', companyId: company.id, address: '—' } })
+  group = await prisma.group.create({ data: { name: 'General', branchId: branch.id } })
+  return group
+}
+
+export async function createLesson(formData: FormData): Promise<void> {
+  const session = await getServerSession(authOptions)
+  ensureLogoped(session)
+  const userId = String(session.user.id || '')
+  const title = String(formData.get('title') || '').trim() || 'Занятие'
+  const startsAtStr = String(formData.get('startsAt') || '')
+  const endsAtStr = String(formData.get('endsAt') || '')
+  if (!startsAtStr || !endsAtStr) return
+  const startsAt = new Date(startsAtStr)
+  const endsAt = new Date(endsAtStr)
+  if (!(startsAt < endsAt)) return
+  // constraints: within working intervals
+  const dow = (startsAt.getDay() || 7)
+  const templates = await prisma.workTemplate.findMany({ where: { userId } })
+  const minutes = (d: Date) => d.getHours() * 60 + d.getMinutes()
+  const sMin = minutes(startsAt), eMin = minutes(endsAt)
+  const okWithin = templates.some(t => t.dayOfWeek === dow && sMin >= t.startMinutes && eMin <= t.endMinutes)
+  if (templates.length > 0 && !okWithin) {
+    revalidatePath('/logoped/schedule');
+    return
+  }
+  // constraints: blocked times
+  const blockedOverlap = await prisma.blockedTime.findMany({ where: { userId, OR: [
+    { startsAt: { lt: endsAt }, endsAt: { gt: startsAt } },
+  ] } })
+  if (blockedOverlap.length > 0) { revalidatePath('/logoped/schedule'); return }
+  // constraints: lesson overlaps for this logoped
+  const overlaps = await prisma.lesson.findFirst({ where: {
+    logopedId: userId,
+    OR: [ { startsAt: { lt: endsAt }, endsAt: { gt: startsAt } } ],
+  } })
+  if (overlaps) { revalidatePath('/logoped/schedule'); return }
+  const group = await ensureDefaultGroup(userId)
+  await prisma.lesson.create({ data: { title, startsAt, endsAt, groupId: group.id, logopedId: userId } })
+  revalidatePath('/logoped/schedule')
+}
+
+export async function deleteLesson(formData: FormData): Promise<void> {
+  const session = await getServerSession(authOptions)
+  ensureLogoped(session)
+  const id = String(formData.get('id') || '')
+  if (!id) return
+  // запрет удалять прошедшие уроки (для учёта и статистики)
+  const lesson = await prisma.lesson.findUnique({ where: { id } })
+  if (!lesson) { revalidatePath('/logoped/schedule'); return }
+  const now = new Date()
+  if (lesson.endsAt < now) { revalidatePath('/logoped/schedule'); return }
+  await prisma.lesson.delete({ where: { id } })
+  revalidatePath('/logoped/schedule')
+}
+
+export async function generateWeekSlots(formData: FormData): Promise<void> {
+  const session = await getServerSession(authOptions)
+  ensureLogoped(session)
+  const userId = String(session.user.id || '')
+  const weekStartStr = String(formData.get('weekStart') || '')
+  if (!weekStartStr) return
+  const weekStart = new Date(weekStartStr)
+  weekStart.setHours(0,0,0,0)
+  // use user settings for slot/break
+  const user = await prisma.user.findUnique({ where: { id: userId } })
+  const slot = user?.scheduleSlotMinutes ?? 30
+  const brk = user?.scheduleBreakMinutes ?? 0
+  const group = await ensureDefaultGroup(userId)
+  const templates = await prisma.workTemplate.findMany({ where: { userId } })
+  for (const t of templates) {
+    const day = new Date(weekStart)
+    day.setDate(weekStart.getDate() + (t.dayOfWeek - 1))
+    let cursor = new Date(day)
+    cursor.setHours(Math.floor(t.startMinutes/60), t.startMinutes%60, 0, 0)
+    const endDay = new Date(day)
+    endDay.setHours(Math.floor(t.endMinutes/60), t.endMinutes%60, 0, 0)
+    while (cursor < endDay) {
+      const startsAt = new Date(cursor)
+      const endsAt = new Date(startsAt)
+      endsAt.setMinutes(endsAt.getMinutes() + slot)
+      if (endsAt > endDay) break
+      const blockedOverlap = await prisma.blockedTime.findFirst({ where: { userId, startsAt: { lt: endsAt }, endsAt: { gt: startsAt } } })
+      if (!blockedOverlap) {
+        const overlap = await prisma.lesson.findFirst({ where: { logopedId: userId, startsAt: { lt: endsAt }, endsAt: { gt: startsAt } } })
+        if (!overlap) {
+          await prisma.lesson.create({ data: { title: 'Занятие', startsAt, endsAt, groupId: group.id, logopedId: userId } })
+        }
+      }
+      cursor = new Date(endsAt)
+      if (brk) cursor.setMinutes(cursor.getMinutes() + brk)
+    }
+  }
+  revalidatePath('/logoped/schedule')
+}
+
+export async function enrollChildToLesson(formData: FormData): Promise<void> {
+  const session = await getServerSession(authOptions)
+  ensureLogoped(session)
+  const childId = String(formData.get('childId') || '')
+  const lessonId = String(formData.get('lessonId') || '')
+  if (!childId || !lessonId) return
+  const exists = await prisma.enrollment.findUnique({ where: { childId_lessonId: { childId, lessonId } } })
+  if (!exists) {
+    await prisma.enrollment.create({ data: { childId, lessonId, status: 'ENROLLED' } })
+  }
+  revalidatePath('/logoped/schedule')
+}
+
+export async function createBooking(formData: FormData): Promise<void> {
+  const session = await getServerSession(authOptions)
+  ensureLogoped(session)
+  const lessonId = String(formData.get('lessonId') || '')
+  const holder = String(formData.get('holder') || '').trim()
+  const childIdRaw = formData.get('childId')
+  const childId = childIdRaw ? String(childIdRaw) : undefined
+  const createdBy = String(session.user.id || '')
+  if (!lessonId || !holder) return
+  // если уже есть запись ребёнка — бронировать нельзя
+  const lesson = await prisma.lesson.findUnique({ where: { id: lessonId }, include: { enrolls: true, bookings: true } })
+  if (!lesson || (lesson.enrolls?.length ?? 0) > 0) { revalidatePath('/logoped/schedule'); return }
+  // если уже есть активная бронь — не создаём вторую
+  const active = lesson.bookings?.find((b: { status?: string }) => b.status === 'ACTIVE')
+  if (active) { revalidatePath('/logoped/schedule'); return }
+  if (!childId) {
+    const parts = holder.split(/\s+/).filter(Boolean)
+    const firstName = parts.length ? parts[parts.length-1] : holder
+    const lastName = parts.length > 1 ? parts.slice(0,-1).join(' ') : ''
+    const child = await prisma.child.create({ data: { firstName, lastName, logopedId: createdBy, isArchived: false } })
+    await prisma.booking.create({ data: { lessonId, holder, createdBy, childId: child.id } })
+    revalidatePath('/logoped/schedule')
+    return
+  }
+  await prisma.booking.create({ data: { lessonId, holder, createdBy, childId } })
+  revalidatePath('/logoped/schedule')
+}
+
+export async function cancelBooking(formData: FormData): Promise<void> {
+  const session = await getServerSession(authOptions)
+  ensureLogoped(session)
+  const bookingId = String(formData.get('bookingId') || '')
+  if (!bookingId) return
+  await prisma.booking.update({ where: { id: bookingId }, data: { status: 'CANCELLED' } })
+  revalidatePath('/logoped/schedule')
+}
+
+export async function cancelEnrollment(formData: FormData): Promise<void> {
+  const session = await getServerSession(authOptions)
+  ensureLogoped(session)
+  const childId = String(formData.get('childId') || '')
+  const lessonId = String(formData.get('lessonId') || '')
+  if (!childId || !lessonId) return
+  await prisma.enrollment.delete({ where: { childId_lessonId: { childId, lessonId } } }).catch(()=>{})
+  revalidatePath('/logoped/schedule')
+}
+
+export async function generateSlotsNext4Weeks(): Promise<void> {
+  const session = await getServerSession(authOptions)
+  ensureLogoped(session)
+  const userId = String(session.user.id || '')
+  const now = new Date()
+  const today = new Date(now); today.setHours(0,0,0,0)
+  // вычисляем понедельник текущей недели
+  const day = now.getDay() || 7
+  const weekStart = new Date(now)
+  weekStart.setDate(now.getDate() - (day - 1))
+  weekStart.setHours(0,0,0,0)
+  // конец горизонта — ровно 4 недели вперёд (28 дней)
+  const endDate = new Date(weekStart)
+  endDate.setDate(endDate.getDate() + 27)
+  endDate.setHours(23,59,59,999)
+
+  const user = await prisma.user.findUnique({ where: { id: userId } })
+  const slot = user?.scheduleSlotMinutes ?? 30
+  const brk = user?.scheduleBreakMinutes ?? 0
+  const group = await ensureDefaultGroup(userId)
+  const templates = await prisma.workTemplate.findMany({ where: { userId } })
+
+  // Очистка: удалить будущие уроки без активностей, которые не ложатся на новую сетку
+  try {
+    const nowLocal = new Date()
+    const futureLessons = await prisma.lesson.findMany({
+      where: {
+        logopedId: userId,
+        startsAt: { gt: nowLocal },
+        endsAt: { lte: endDate },
+      },
+      include: { enrolls: true, bookings: true, evaluations: true, consultationRequests: true },
+    })
+    const minutes = (d: Date) => d.getHours() * 60 + d.getMinutes()
+    const alignsToGrid = (l: { startsAt: Date | string; endsAt: Date | string }) => {
+      const dow = (new Date(l.startsAt).getDay() || 7)
+      const dayTemplates = templates.filter(t => t.dayOfWeek === dow)
+      if (dayTemplates.length === 0) return false
+      const sMin = minutes(new Date(l.startsAt))
+      const eMin = minutes(new Date(l.endsAt))
+      const dur = eMin - sMin
+      if (dur !== slot) return false
+      for (const t of dayTemplates) {
+        if (sMin < t.startMinutes || (sMin + slot) > t.endMinutes) continue
+        const step = slot + (brk || 0)
+        const offset = sMin - t.startMinutes
+        if (step === 0) continue
+        if (offset % step === 0) return true
+      }
+      return false
+    }
+    const deletable = futureLessons.filter(l =>
+      (l.enrolls?.length ?? 0) === 0 &&
+      (l.bookings?.length ?? 0) === 0 &&
+      (l.evaluations?.length ?? 0) === 0 &&
+      (l.consultationRequests?.length ?? 0) === 0 &&
+      !alignsToGrid(l)
+    )
+    if (deletable.length) {
+      await prisma.$transaction(deletable.map(l => prisma.lesson.delete({ where: { id: l.id } })))
+    }
+  } catch {}
+
+  // идём неделями
+  for (let ws = new Date(weekStart); ws <= endDate; ws.setDate(ws.getDate() + 7)) {
+    for (const t of templates) {
+      const dayDate = new Date(ws)
+      dayDate.setDate(ws.getDate() + (t.dayOfWeek - 1))
+      // пропускаем дни в прошлом относительно сегодня
+      if (dayDate < today) continue
+      // генерируем слотную сетку за день
+      let cursor = new Date(dayDate)
+      cursor.setHours(Math.floor(t.startMinutes/60), t.startMinutes%60, 0, 0)
+      const endDay = new Date(dayDate)
+      endDay.setHours(Math.floor(t.endMinutes/60), t.endMinutes%60, 0, 0)
+      while (cursor < endDay && cursor <= endDate) {
+        const startsAt = new Date(cursor)
+        const endsAt = new Date(startsAt)
+        endsAt.setMinutes(endsAt.getMinutes() + slot)
+        if (endsAt > endDay) break
+        // блокировки
+        const blockedOverlap = await prisma.blockedTime.findFirst({ where: { userId, startsAt: { lt: endsAt }, endsAt: { gt: startsAt } } })
+        if (!blockedOverlap) {
+          // уроки пересечения
+          const overlap = await prisma.lesson.findFirst({ where: { logopedId: userId, startsAt: { lt: endsAt }, endsAt: { gt: startsAt } } })
+          if (!overlap) {
+            await prisma.lesson.create({ data: { title: 'Занятие', startsAt, endsAt, groupId: group.id, logopedId: userId } })
+          }
+        }
+        cursor = new Date(endsAt)
+        if (brk) cursor.setMinutes(cursor.getMinutes() + brk)
+      }
+    }
+  }
+  revalidatePath('/logoped/schedule')
+}

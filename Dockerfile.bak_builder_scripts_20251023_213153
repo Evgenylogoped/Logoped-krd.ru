@@ -1,0 +1,45 @@
+ARG NODE_VERSION=18
+ARG NPM_REGISTRY=https://registry.npmjs.org
+ARG PRISMA_ENGINES_MIRROR
+# При очень медленной сети Prisma можно задать зеркало движков:
+# ARG PRISMA_ENGINES_MIRROR=https://registry.npmmirror.com/-/binary/prisma
+
+FROM node:${NODE_VERSION}-bullseye-slim AS builder
+ARG PRISMA_ENGINES_MIRROR
+WORKDIR /app
+ENV NODE_ENV=development
+# Ускорение/устойчивость npm + запрет тяжёлых загрузок
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+ENV PRISMA_SKIP_POSTINSTALL_GENERATE=1
+ENV PRISMA_ENGINES_MIRROR=${PRISMA_ENGINES_MIRROR}
+ARG NPM_REGISTRY
+RUN npm config set registry ${NPM_REGISTRY} \
+ && npm config set fetch-retries 5 \
+ && npm config set fetch-retry-factor 2 \
+ && npm config set fetch-retry-maxtimeout 600000 \
+ && npm config set fetch-timeout 600000 \
+ && npm config set prefer-online true \
+ && npm config set legacy-peer-deps true
+COPY package*.json ./
+RUN bash -lc 'set -e; i=0; until [ $i -ge 5 ]; do npm ci --no-audit --no-fund --omit=optional --ignore-scripts && exit 0; i=$((i+1)); echo npm-ci-retry-$i; sleep $((5*i)); done; exit 1'
+COPY . .
+# Контролируемая генерация Prisma (без постустановочных зависаний)
+ENV PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1
+# RUN npx prisma generate
+RUN npm rebuild sharp --unsafe-perm || true
+RUN npm rebuild lightningcss --unsafe-perm || true
+# Сборка Next (санитайз CSS-комментариев + отключение cssnano)
+RUN find /app -type f -name '*.css' -print0 | xargs -0 -I{} sed -i -E 's@^[[:space:]]*//.*$@@' "{}"
+RUN NODE_ENV=production NEXT_DISABLE_OPTIMIZED_CSS=1 NEXT_TELEMETRY_DISABLED=1 npm run build
+
+FROM node:${NODE_VERSION}-bullseye-slim AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+# Перенос модулей и очистка dev-зависимостей без второй сетевой установки
+COPY --from=builder /app/node_modules ./node_modules
+# Артефакты
+COPY --from=builder /app/.next ./.next
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/prisma ./prisma
+COPY package*.json ./
+RUN bash -lc 'set -e; i=0; until [ $i -ge 5 ]; do npm ci --no-audit --no-fund --omit=optional --ignore-scripts && exit 0; i=$((i+1)); echo npm-ci-retry-$i; sleep $((5*i)); done; exit 1'

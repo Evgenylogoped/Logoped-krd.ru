@@ -1,0 +1,762 @@
+// Prisma schema for NovikovDom (dev: SQLite)
+// In prod we will adapt to PostgreSQL (strings used for enums in dev)
+
+generator client {
+  provider = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+/// Global roles for users
+enum Role {
+  SUPER_ADMIN
+  ADMIN
+  ACCOUNTANT
+  LOGOPED
+  PARENT
+}
+
+/// Per-conversation settings (group chat configuration)
+model ConversationSettings {
+  conversationId String      @id
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+  backgroundUrl  String?
+  backgroundColor String?
+  postingPolicy  String?     // 'ALL' | 'LOGOPED_ONLY' | 'RESTRICTED'
+  restrictedJson Json?       // map of userId -> boolean (allowed)
+  bannedUntilJson Json?      // map of userId -> ISO timestamp
+  mutedUntilJson  Json?      // map of userId -> ISO timestamp
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+}
+
+/// Per-participant runtime state (overrides)
+model ConversationParticipantState {
+  conversationId String
+  userId         String
+  canPost        Boolean   @default(true)
+  bannedUntil    DateTime?
+  mutedUntil     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  participant ConversationParticipant @relation(fields: [conversationId, userId], references: [conversationId, userId])
+
+  @@id([conversationId, userId])
+}
+
+model OrgConsultationRequest {
+  id              String    @id @default(cuid())
+  requesterId     String
+  targetId        String
+  companyId       String
+  branchId        String?
+  topic           String?
+  note            String?
+  status          String    @default("PENDING") // PENDING | APPROVED | REJECTED
+  reason          String?
+  requesterReadAt DateTime?
+  targetReadAt    DateTime?
+  createdAt       DateTime  @default(now())
+  decidedAt       DateTime?
+
+  requester User    @relation("User_org_consult_requested", fields: [requesterId], references: [id])
+  target    User    @relation("User_org_consult_assigned", fields: [targetId], references: [id])
+  company   Company @relation(fields: [companyId], references: [id])
+  branch    Branch? @relation(fields: [branchId], references: [id])
+
+  @@index([targetId, status])
+  @@index([companyId, createdAt])
+}
+
+model OrganizationExpansionRequest {
+  id                String    @id @default(cuid())
+  requesterId       String
+  requester         User      @relation("OrganizationExpansionRequester", fields: [requesterId], references: [id])
+  companyId         String
+  company           Company   @relation(fields: [companyId], references: [id])
+  type              String // 'BRANCHES' | 'LOGOPEDS'
+  requestedBranches Int?
+  requestedLogopeds Int?
+  status            String    @default("PENDING") // PENDING | APPROVED | REJECTED
+  reason            String?
+  createdAt         DateTime  @default(now())
+  decidedAt         DateTime?
+}
+
+model OrganizationMembershipRequest {
+  id              String    @id @default(cuid())
+  requesterId     String
+  requester       User      @relation("OrganizationMembershipRequester", fields: [requesterId], references: [id])
+  leaderEmail     String
+  targetCompanyId String?
+  status          String    @default("PENDING") // PENDING | APPROVED | REJECTED
+  reason          String?
+  createdAt       DateTime  @default(now())
+  decidedAt       DateTime?
+}
+
+model UserSupervisor {
+  supervisorId  String
+  subordinateId String
+  supervisor    User     @relation("Supervisor", fields: [supervisorId], references: [id])
+  subordinate   User     @relation("Subordinate", fields: [subordinateId], references: [id])
+  createdAt     DateTime @default(now())
+
+  @@id([supervisorId, subordinateId])
+}
+
+model ConsultationRequest {
+  id             String    @id @default(cuid())
+  supervisorId   String
+  subordinateId  String
+  lessonId       String
+  parentEmail    String
+  childFirstName String
+  childLastName  String
+  note           String?
+  status         String    @default("PENDING") // PENDING | APPROVED | REJECTED
+  createdAt      DateTime  @default(now())
+  respondedAt    DateTime?
+
+  supervisor  User   @relation("SupervisorUser", fields: [supervisorId], references: [id])
+  subordinate User   @relation("SubordinateUser", fields: [subordinateId], references: [id])
+  lesson      Lesson @relation(fields: [lessonId], references: [id])
+}
+
+model TransferRequest {
+  id            String   @id @default(cuid())
+  childId       String
+  child         Child    @relation(fields: [childId], references: [id])
+  fromLogopedId String
+  fromLogoped   User     @relation("FromLogoped", fields: [fromLogopedId], references: [id])
+  toLogopedId   String
+  toLogoped     User     @relation("ToLogoped", fields: [toLogopedId], references: [id])
+  status        String   @default("PENDING") // PENDING | APPROVED | REJECTED
+  createdBy     String // userId родителя или логопеда, кто инициировал
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model Booking {
+  id           String    @id @default(cuid())
+  lessonId     String
+  lesson       Lesson    @relation(fields: [lessonId], references: [id])
+  childId      String
+  child        Child     @relation(fields: [childId], references: [id])
+  holder       String // имя, указанное логопедом или родителем
+  createdBy    String // userId кто создал бронь
+  status       String    @default("ACTIVE") // ACTIVE | CANCELLED
+  createdAt    DateTime  @default(now())
+  liquidatedAt DateTime?
+}
+
+model ProgressEntry {
+  id      String   @id @default(cuid())
+  childId String
+  child   Child    @relation(fields: [childId], references: [id])
+  date    DateTime @default(now())
+  score   Int      @default(0) // aggregated/simple score for MVP
+  note    String?
+}
+
+model ChildReward {
+  id       String   @id @default(cuid())
+  childId  String
+  child    Child    @relation(fields: [childId], references: [id])
+  kind     String // 'star' | 'medal' | 'cup' | ...
+  title    String?
+  issuedAt DateTime @default(now())
+}
+
+model WorkTemplate {
+  id           String @id @default(cuid())
+  userId       String
+  user         User   @relation(fields: [userId], references: [id])
+  dayOfWeek    Int // 1=Mon..7=Sun
+  startMinutes Int // minutes since midnight
+  endMinutes   Int // minutes since midnight
+}
+
+model BlockedTime {
+  id       String   @id @default(cuid())
+  userId   String
+  user     User     @relation(fields: [userId], references: [id])
+  startsAt DateTime
+  endsAt   DateTime
+  reason   String?
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  action    String
+  payload   String
+  actorId   String?
+  actor     User?    @relation("UserAuditLogs", fields: [actorId], references: [id])
+  createdAt DateTime @default(now())
+}
+
+model User {
+  id                       String    @id @default(cuid())
+  email                    String    @unique
+  emailVerifiedAt          DateTime?
+  name                     String?
+  image                    String?
+  role                     Role      @default(PARENT)
+  passwordHash             String
+  preferredScheduleView    String? // 'week' | 'month'
+  timeZone                 String? // e.g., 'Europe/Moscow'
+  city                     String?
+  phone                    String?
+  notifyByEmail            Boolean   @default(true)
+  currency                 String? // e.g., 'RUB'
+  reportPeriod             String? // 'week' | 'month' | 'quarter'
+  theme                    String? // UI theme key (e.g., 'default','dark','ios',...)
+  // logoped profile fields
+  profession               String?
+  experienceYears          Int?
+  specialization           String?
+  about                    String?
+  education                String?
+  hideEducationFromParents Boolean   @default(false)
+  hideAboutFromParents     Boolean   @default(false)
+  address                  String?
+  lessonPrice              Int?
+  showPriceToParents       Boolean   @default(false)
+  // listing priority flags (for accountant control)
+  featuredSuper            Boolean   @default(false)
+  featured                 Boolean   @default(false)
+  // delivery format
+  isOnline                 Boolean   @default(false)
+  isOffline                Boolean   @default(false)
+  // schedule settings
+  scheduleSlotMinutes      Int?
+  scheduleBreakMinutes     Int?
+  // activation / billing
+  betaStartedAt            DateTime?
+  betaExpiresAt            DateTime?
+  activatedUntil           DateTime?
+  activatedForever         Boolean   @default(false)
+  // notifications
+  lastNotificationsSeenAt  DateTime?
+  parent                   Parent?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+  // grace period after org liquidation
+  orgGraceUntil            DateTime?
+  // organization
+  branchId                 String?
+  branch                   Branch?   @relation("UserBranch", fields: [branchId], references: [id])
+  managedBranches          Branch[]  @relation("BranchManager")
+  ownedCompanies           Company[] @relation("CompanyOwner")
+  // Scoped roles (org/branch)
+  orgRoles                 UserOrganizationRole[]
+  branchRoles              UserBranchRole[]
+
+  // NextAuth
+  accounts                       Account[]
+  sessions                       Session[]
+  // relations
+  workTemplates                  WorkTemplate[]
+  blockedTimes                   BlockedTime[]
+  lessons                        Lesson[]                        @relation("UserLessons")
+  // children assigned to this logoped
+  childrenLogoped                Child[]                         @relation("UserChildren")
+  // transfer requests targeting this logoped
+  transferIncoming               TransferRequest[]               @relation("ToLogoped")
+  transferOutgoing               TransferRequest[]               @relation("FromLogoped")
+  lessonEvaluations              LessonEvaluation[]
+  activationRequests             ActivationRequest[]             @relation("TargetLogoped")
+  // hierarchy
+  supervisors                    UserSupervisor[]                @relation("Supervisor")
+  subordinates                   UserSupervisor[]                @relation("Subordinate")
+  consultationRequestsCreated    ConsultationRequest[]           @relation("SupervisorUser")
+  consultationRequestsAssigned   ConsultationRequest[]           @relation("SubordinateUser")
+  // chat
+  conversationParticipants       ConversationParticipant[]       @relation("UserConversationParticipants")
+  messagesAuthored               Message[]                       @relation("UserMessagesAuthored")
+  // password tokens
+  passwordTokens                 PasswordToken[]
+  // organization requests
+  organizationRequests           OrganizationRequest[]           @relation("OrganizationRequester")
+  organizationMembershipRequests OrganizationMembershipRequest[] @relation("OrganizationMembershipRequester")
+  expansionRequests              OrganizationExpansionRequest[]  @relation("OrganizationExpansionRequester")
+  // org consultations
+  orgConsultationsRequested      OrgConsultationRequest[]        @relation("User_org_consult_requested")
+  orgConsultationsAssigned       OrgConsultationRequest[]        @relation("User_org_consult_assigned")
+  // audit logs
+  auditLogs                      AuditLog[]                      @relation("UserAuditLogs")
+
+  // Finance relations
+  transactions                   Transaction[]                   @relation("UserTransactions")
+  commissionRates                CommissionRate[]                @relation("UserCommissionRates")
+  payoutRequests                 PayoutRequest[]                 @relation("UserPayoutRequests")
+  payoutsConfirmed               PayoutRequest[]                 @relation("PayoutConfirmedBy")
+  // Passes (subscriptions) managed by this logoped
+  passes                         Pass[]
+  // Billing
+  billingCustomers               BillingCustomer[]
+  subscriptions                  Subscription[]
+  instagram String?
+}
+
+// (Удалён дублирующийся и ошибочный блок OrgConsultationRequest)
+
+model Parent {
+  id                 String              @id @default(cuid())
+  userId             String              @unique
+  user               User                @relation(fields: [userId], references: [id])
+  children           Child[]
+  documents          Document[]
+  contracts          Contract[]
+  payments           Payment[]
+  fullName           String?
+  phone              String?
+  info               String? // иная информация для логопеда
+  isArchived         Boolean             @default(false)
+  activationRequests ActivationRequest[]
+  createdAt          DateTime            @default(now())
+  // Видимый пароль родителя (зашифрованный), чтобы логопед мог его просмотреть
+  visiblePasswordEncrypted String?
+  visiblePasswordUpdatedAt DateTime?
+}
+
+model Child {
+  id                 String              @id @default(cuid())
+  parentId           String
+  parent             Parent              @relation(fields: [parentId], references: [id])
+  logopedId          String?
+  logoped            User?               @relation("UserChildren", fields: [logopedId], references: [id])
+  firstName          String
+  lastName           String
+  birthDate          DateTime?
+  diagnosis          String?
+  conclusion         String?
+  photoUrl           String?
+  showPhotoToParent      Boolean? @default(false)
+  showDiagnosisToParent  Boolean? @default(false)
+  showConclusionToParent Boolean? @default(false)
+  allowSelfEnroll        Boolean? @default(false)
+  isArchived             Boolean? @default(false)
+  rateLesson             Decimal?
+  rateConsultation       Decimal?
+  enrolls            Enrollment[]
+  documents          Document[]
+  // Subscriptions (passes)
+  passes             Pass[]
+  bookings               Booking[]
+  // Back-relations for various child-bound entities
+  transferRequests   TransferRequest[]
+  progressEntries    ProgressEntry[]
+  rewards            ChildReward[]
+  contracts          Contract[]
+  lessonEvaluations  LessonEvaluation[]
+
+  @@index([logopedId])
+  @@index([parentId])
+}
+
+model LessonEvaluation {
+  id             String   @id @default(cuid())
+  lessonId       String
+  lesson         Lesson   @relation(fields: [lessonId], references: [id])
+  childId        String?
+  child          Child?   @relation(fields: [childId], references: [id])
+  homeworkRating Int?
+  lessonRating   Int?
+  behaviorRating Int?
+  comment        String?
+  showToParent   Boolean  @default(false)
+  status         String   @default("DONE") // DONE | CANCELLED
+  createdBy      String
+  createdByUser  User     @relation(fields: [createdBy], references: [id])
+  createdAt      DateTime @default(now())
+
+  @@index([childId, createdAt])
+}
+
+model ActivationRequest {
+  id              String   @id @default(cuid())
+  parentId        String
+  parent          Parent   @relation(fields: [parentId], references: [id])
+  targetLogopedId String
+  targetLogoped   User     @relation("TargetLogoped", fields: [targetLogopedId], references: [id])
+  status          String   @default("PENDING") // PENDING | APPROVED | REJECTED
+  note            String?
+  createdAt       DateTime @default(now())
+}
+
+model Company {
+  id                String                         @id @default(cuid())
+  name              String
+  logoUrl           String?
+  website           String?
+  about             String?
+  branches          Branch[]
+  ownerId           String?
+  owner             User?                          @relation("CompanyOwner", fields: [ownerId], references: [id])
+  allowedBranches   Int                            @default(4)
+  allowedLogopeds   Int                            @default(5)
+  createdAt         DateTime                       @default(now())
+  liquidatedAt      DateTime?
+  expansionRequests OrganizationExpansionRequest[]
+  orgConsultations  OrgConsultationRequest[]
+  // Finance
+  transactions      Transaction[]               @relation("CompanyTransactions")
+  // Scoped roles back-relation (ORG_MANAGER etc.)
+  organizationRoles UserOrganizationRole[]
+}
+
+model Branch {
+  id               String                   @id @default(cuid())
+  companyId        String
+  company          Company                  @relation(fields: [companyId], references: [id])
+  name             String
+  address          String?
+  groups           Group[]
+  managerId        String?
+  manager          User?                    @relation("BranchManager", fields: [managerId], references: [id])
+  users            User[]                   @relation("UserBranch")
+  managerRoles     UserBranchRole[]
+  // org consultations
+  orgConsultations OrgConsultationRequest[]
+  // Finance
+  transactions     Transaction[]               @relation("BranchTransactions")
+}
+
+/// Scoped role at Organization level
+model UserOrganizationRole {
+  id             String   @id @default(cuid())
+  userId         String
+  organizationId String
+  role           String   @default("ORG_MANAGER") // future-proof if we add more org-scoped roles
+  createdAt      DateTime @default(now())
+
+  user           User     @relation(fields: [userId], references: [id])
+  organization   Company  @relation(fields: [organizationId], references: [id])
+
+  @@unique([userId, organizationId, role])
+  @@index([organizationId])
+}
+
+/// Scoped role at Branch level
+model UserBranchRole {
+  id        String   @id @default(cuid())
+  userId    String
+  branchId  String
+  role      String   @default("BRANCH_MANAGER") // future-proof
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id])
+  branch    Branch   @relation(fields: [branchId], references: [id])
+
+  @@unique([userId, branchId, role])
+  @@index([branchId])
+}
+
+model Group {
+  id       String   @id @default(cuid())
+  branchId String
+  branch   Branch   @relation(fields: [branchId], references: [id])
+  name     String
+  lessons  Lesson[]
+}
+
+model Lesson {
+  id                   String                @id @default(cuid())
+  title                String
+  startsAt             DateTime
+  endsAt               DateTime
+  groupId              String
+  group                Group                 @relation(fields: [groupId], references: [id])
+  // link to logoped (owner of the schedule)
+  logopedId            String?
+  logoped              User?                 @relation("UserLessons", fields: [logopedId], references: [id])
+  enrolls              Enrollment[]
+  bookings             Booking[]
+  evaluations          LessonEvaluation[]
+  consultationRequests ConsultationRequest[]
+
+  // Finance snapshots (set at the time a lesson is settled as held)
+  commissionPercentAtTime Int?
+  revenueAtTime           Decimal?
+  therapistShareAtTime    Decimal?
+  leaderShareAtTime       Decimal?
+  // Settlement and payout tracking
+  settledAt               DateTime?
+  payoutStatus            String               @default("NONE") // NONE | INCLUDED | PAID
+  // Payout relations are tracked via PayoutLessonLink
+  payoutLinks             PayoutLessonLink[]
+  // Transactions linked to this lesson
+  transactions            Transaction[]        @relation("LessonTransactions")
+  // Pass usages linked to this lesson
+  passUsages              PassUsage[]
+}
+
+/// Subscription (pass) purchased by parent for child, usually tied to a therapist
+model Pass {
+  id            String    @id @default(cuid())
+  childId       String
+  child         Child     @relation(fields: [childId], references: [id])
+  logopedId     String?
+  logoped       User?     @relation(fields: [logopedId], references: [id])
+  totalLessons  Int
+  remainingLessons Int
+  totalPrice    Decimal
+  validUntil    DateTime?
+  status        String    @default("ACTIVE") // ACTIVE | EXPIRED | CANCELLED
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  usages        PassUsage[]
+}
+
+/// Consumption of a pass by linking to a held lesson
+model PassUsage {
+  id        String   @id @default(cuid())
+  passId    String
+  pass      Pass     @relation(fields: [passId], references: [id])
+  lessonId  String   @unique
+  lesson    Lesson   @relation(fields: [lessonId], references: [id])
+  usedAt    DateTime @default(now())
+}
+
+model Enrollment {
+  childId  String
+  lessonId String
+  status   String @default("ENROLLED") // ENROLLED | CANCELLED
+  child    Child  @relation(fields: [childId], references: [id])
+  lesson   Lesson @relation(fields: [lessonId], references: [id])
+
+  @@id([childId, lessonId])
+}
+
+model Document {
+  id        String   @id @default(cuid())
+  name      String
+  url       String
+  mimeType  String
+  childId   String?
+  parentId  String?
+  child     Child?   @relation(fields: [childId], references: [id])
+  parent    Parent?  @relation(fields: [parentId], references: [id])
+  createdAt DateTime @default(now())
+}
+
+model Contract {
+  id        String    @id @default(cuid())
+  parentId  String
+  childId   String?
+  status    String    @default("DRAFT") // DRAFT | ACTIVE | SUSPENDED | TERMINATED
+  fileUrl   String?
+  signedAt  DateTime?
+  parent    Parent    @relation(fields: [parentId], references: [id])
+  child     Child?    @relation(fields: [childId], references: [id])
+  createdAt DateTime  @default(now())
+}
+
+model Payment {
+  id        String   @id @default(cuid())
+  parentId  String
+  amount    Decimal  @default(0)
+  status    String   @default("PENDING") // PENDING | PAID | FAILED | REFUNDED
+  parent    Parent   @relation(fields: [parentId], references: [id])
+  createdAt DateTime @default(now())
+}
+
+model Conversation {
+  id           String                    @id @default(cuid())
+  title        String?
+  createdAt    DateTime                  @default(now())
+  updatedAt    DateTime                  @updatedAt
+  participants ConversationParticipant[]
+  messages     Message[]
+  settings     ConversationSettings?
+}
+
+model ConversationParticipant {
+  conversationId String
+  userId         String
+  role           String       @default("MEMBER") // 'LOGOPED' | 'PARENT' | 'SUPERVISOR' | 'ADMIN' | 'MEMBER'
+  joinedAt       DateTime     @default(now())
+  lastReadAt     DateTime?
+  typingUntil    DateTime?
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+  user           User         @relation("UserConversationParticipants", fields: [userId], references: [id])
+  state          ConversationParticipantState?
+
+  @@id([conversationId, userId])
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  authorId       String
+  body           String
+  type           String       @default("TEXT") // TEXT | IMAGE | FILE | SYSTEM
+  attachmentUrl  String?
+  replyToId      String?
+  replyTo        Message?     @relation("MessageReply", fields: [replyToId], references: [id])
+  editedAt       DateTime?
+  deletedAt      DateTime?
+  reactionsJson  Json?
+  createdAt      DateTime     @default(now())
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+  author         User         @relation("UserMessagesAuthored", fields: [authorId], references: [id])
+  replies        Message[]    @relation("MessageReply")
+}
+
+/// Financial transaction log for full auditability
+model Transaction {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation("UserTransactions", fields: [userId], references: [id])
+  companyId  String?
+  company    Company? @relation("CompanyTransactions", fields: [companyId], references: [id])
+  branchId   String?
+  branch     Branch?  @relation("BranchTransactions", fields: [branchId], references: [id])
+  kind       String   // REVENUE | THERAPIST_BALANCE | CASH_HELD | PAYOUT | ADJUSTMENT
+  amount     Decimal
+  lessonId   String?
+  lesson     Lesson?  @relation("LessonTransactions", fields: [lessonId], references: [id])
+  meta       Json?
+  createdAt  DateTime @default(now())
+  archivedAt DateTime?
+
+  @@index([userId, createdAt])
+  @@index([lessonId])
+  @@index([companyId, branchId, createdAt])
+}
+
+/// Historical commission rate for a logoped (therapist)
+model CommissionRate {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation("UserCommissionRates", fields: [userId], references: [id])
+  percent   Int
+  validFrom DateTime
+  validTo   DateTime?
+
+  @@index([userId, validFrom])
+}
+
+/// Payout request from therapist and confirmation by leader
+model PayoutRequest {
+  id                   String    @id @default(cuid())
+  logopedId            String
+  logoped              User      @relation("UserPayoutRequests", fields: [logopedId], references: [id])
+  status               String    @default("PENDING") // PENDING | PAID | CANCELLED
+  balanceAtRequest     Decimal
+  cashHeldAtRequest    Decimal
+  finalAmount          Decimal
+  createdAt            DateTime  @default(now())
+  confirmedAt          DateTime?
+  confirmedById        String?
+  confirmedBy          User?     @relation("PayoutConfirmedBy", fields: [confirmedById], references: [id])
+  lessons              PayoutLessonLink[]
+}
+
+/// Link lessons included into a specific payout (prevents double counting)
+model PayoutLessonLink {
+  payoutId String
+  lessonId String
+  createdAt DateTime @default(now())
+
+  payout   PayoutRequest @relation(fields: [payoutId], references: [id])
+  lesson   Lesson        @relation(fields: [lessonId], references: [id])
+
+  @@id([payoutId, lessonId])
+}
+
+/// Billing: external customer mapping (e.g., Stripe)
+model BillingCustomer {
+  id          String   @id @default(cuid())
+  userId      String
+  provider    String   // 'stripe'
+  customerId  String   // external customer id
+  status      String   @default("active") // active | inactive
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user        User     @relation(fields: [userId], references: [id])
+
+  @@index([userId, provider])
+}
+
+/// Billing: subscription status snapshot per user
+model Subscription {
+  id                  String   @id @default(cuid())
+  userId              String
+  plan                String   @default("free") // free | pro
+  status              String   @default("inactive") // active | trialing | canceled | past_due | inactive
+  currentPeriodStart  DateTime?
+  currentPeriodEnd    DateTime?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  user        User     @relation(fields: [userId], references: [id])
+
+  @@index([userId, status])
+}
+
+model PasswordToken {
+  id        String    @id @default(cuid())
+  userId    String
+  token     String    @unique
+  purpose   String // SET | RESET
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id])
+}
+
+// NextAuth tables
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @map("refresh_token")
+  access_token      String? @map("access_token")
+  expires_at        Int?    @map("expires_at")
+  token_type        String? @map("token_type")
+  scope             String?
+  id_token          String? @map("id_token")
+  session_state     String? @map("session_state")
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model OrganizationRequest {
+  id          String    @id @default(cuid())
+  requesterId String
+  requester   User      @relation("OrganizationRequester", fields: [requesterId], references: [id])
+  name        String
+  website     String?
+  about       String?
+  status      String    @default("PENDING") // PENDING | APPROVED | REJECTED
+  reason      String?
+  createdAt   DateTime  @default(now())
+  decidedAt   DateTime?
+}

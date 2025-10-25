@@ -1,0 +1,132 @@
+"use client"
+import { signIn, useSession } from 'next-auth/react'
+import { FormEvent, useEffect, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
+
+export default function LoginPage() {
+  const router = useRouter()
+  const sp = useSearchParams()
+  const { data } = useSession()
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [oauthLoading, setOauthLoading] = useState<string | null>(null)
+  const [error, setError] = useState('')
+  const [reason, setReason] = useState('')
+
+  useEffect(() => {
+    if (data?.user) {
+      // жёсткая навигация для устранения мерцаний
+      window.location.href = '/after-login'
+    }
+  }, [data])
+
+  async function socialSignIn(provider: 'google' | 'yandex' | 'vk') {
+    try {
+      setOauthLoading(provider)
+      const res = await signIn(provider, { callbackUrl: '/after-login' })
+      return res
+    } finally {
+      setTimeout(()=> setOauthLoading(null), 1200)
+    }
+  }
+
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault()
+    setLoading(true)
+    setError('')
+    const res = await signIn('credentials', { email, password, redirect: false, callbackUrl: '/after-login' })
+    // next-auth returns { ok, error, status, url } when redirect:false
+    if ((res as any)?.error) {
+      try { const r = await fetch('/api/auth/reason', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email }) }); const j = await r.json(); setReason(j?.reason || ''); } catch {}
+      setError('Неверный логин или пароль');
+      setLoading(false);
+      return
+    }
+    // success: navigate
+    const url = (res as any)?.url || '/after-login'
+    window.location.href = url
+  }
+
+  return (
+    <div className="flex min-h-screen items-center justify-center p-4">
+      <div className="absolute top-4 left-4">
+        <a href="/" className="btn btn-outline btn-sm">← На главную</a>
+      </div>
+      <form onSubmit={onSubmit} className="card w-full max-w-sm space-y-4">
+        <h1 className="text-2xl font-bold">Вход</h1>
+        {/* banners via query params (extended) */}
+        {sp?.get("reg")==="beta" && (
+          <div className="rounded border p-2 bg-emerald-50 text-emerald-800 text-sm">
+            Аккаунт создан. На ваш email отправлено письмо для подтверждения. Проверьте почту и перейдите по ссылке из письма.
+          </div>
+        )}
+        {sp?.get("reg")==="ok" && (
+          <div className="rounded border p-2 bg-emerald-50 text-emerald-800 text-sm">
+            Аккаунт создан. На ваш email отправлено письмо для подтверждения. Проверьте почту и перейдите по ссылке из письма.
+          </div>
+        )}
+        
+        {sp?.get('reset')==='ok' && (
+          <div className="rounded border p-2 bg-emerald-50 text-emerald-800 text-sm">Пароль успешно сброшен. Войдите с новым паролем.</div>
+        )}
+        {sp?.get('set')==='ok' && (
+          <div className="rounded border p-2 bg-emerald-50 text-emerald-800 text-sm">Пароль установлен. Войдите с новым паролем.</div>
+        )}
+        {sp?.get('linked')==='1' && (
+          <div className="rounded border p-2 bg-emerald-50 text-emerald-800 text-sm">Аккаунт успешно привязан. Войдите, используя этот email и пароль.</div>
+        )}
+        {sp?.get('linked')==='err' && (
+          <div className="rounded border p-2 bg-red-50 text-red-700 text-sm">Не удалось привязать аккаунт. Попробуйте ещё раз или обратитесь к администратору.</div>
+        )}
+        <div className="space-y-1">
+          <label className="block text-sm">Email</label>
+          {/* text вместо email, чтобы разрешить нестандартные адреса (например, с символом #) */}
+          <input className="input" value={email} onChange={e=>setEmail(e.target.value)} type="text" required placeholder="example@domain.ru" />
+          <div className="text-xs text-muted">Допускаются служебные адреса (например, с символом #).</div>
+        </div>
+        <div className="space-y-1">
+          <label className="block text-sm">Пароль</label>
+          <input className="input" value={password} onChange={e=>setPassword(e.target.value)} type="password" required />
+        </div>
+        {error && <div className="text-sm text-red-600">{error}{reason==='unverified' && " (email не подтверждён)"}</div>}
+        {(reason==='unverified') && (
+          <div className="text-sm">
+            <button
+              type="button"
+              className="btn btn-outline btn-sm"
+              onClick={async ()=>{
+                try{
+                  const resp = await fetch('/api/auth/resend-verify', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email }) })
+                  if(resp.ok){ alert('Письмо отправлено. Проверьте почту.') } else { alert('Не удалось отправить письмо. Попробуйте позже.') }
+                }catch(e){ alert('Ошибка сети') }
+              }}
+            >Отправить письмо повторно</button>
+          </div>
+        )}
+
+        <button disabled={loading} className="btn btn-primary w-full disabled:opacity-50">
+          {loading ? 'Входим…' : 'Войти'}
+        </button>
+        <div className="text-center text-sm">
+          <a href="/auth/forgot-password" className="underline">Забыли пароль?</a>
+        </div>
+
+        <div className="relative my-2 text-center text-xs text-gray-500">
+          <span className="px-2 bg-transparent">или</span>
+        </div>
+        <div className="grid grid-cols-1 gap-2">
+          <button type="button" onClick={()=>socialSignIn('google')} className="btn btn-outline w-full disabled:opacity-50" disabled={!!oauthLoading}>
+            {oauthLoading==='google' ? 'Google…' : 'Войти через Google'}
+          </button>
+          <button type="button" onClick={()=>socialSignIn('yandex')} className="btn btn-outline w-full disabled:opacity-50" disabled={!!oauthLoading}>
+            {oauthLoading==='yandex' ? 'Yandex…' : 'Войти через Яндекс'}
+          </button>
+          <button type="button" onClick={()=>socialSignIn('vk')} className="btn btn-outline w-full disabled:opacity-50" disabled={!!oauthLoading}>
+            {oauthLoading==='vk' ? 'VK…' : 'Войти через VK'}
+          </button>
+        </div>
+      </form>
+    </div>
+  )
+}

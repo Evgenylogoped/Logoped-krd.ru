@@ -1,0 +1,197 @@
+"use client"
+import Link from "next/link"
+import { useSession } from "next-auth/react"
+import { useState } from "react"
+import ChatUnreadBadge from "@/components/chat/ChatUnreadBadge"
+import NotificationsBadge from "@/components/notifications/NotificationsBadge"
+import SchedulePendingBadge from "@/components/schedule/SchedulePendingBadge"
+import PayoutsPendingBadge from "@/components/finance/PayoutsPendingBadge"
+import LogopedOrgFinanceBadge from "@/components/finance/LogopedOrgFinanceBadge"
+
+export default function MobileTabBar() {
+  const { data } = useSession()
+  const role = (data?.user as any)?.role as string | undefined
+  const [moreOpen, setMoreOpen] = useState(false)
+
+  const commonClass = "flex-1 flex flex-col items-center justify-center py-2 text-xs"
+  const wrapClass = "fixed bottom-0 inset-x-0 z-20 border-t md:hidden"
+
+  const MorePanel = () => {
+    // базовые пункты нижней панели (чтобы исключить дубли)
+    const baseHrefs = new Set<string>()
+    if (role === 'LOGOPED') {
+      baseHrefs.add('/logoped/schedule')
+      baseHrefs.add('/logoped/clients')
+      baseHrefs.add('/logoped/notifications')
+      baseHrefs.add('/chat')
+    } else if (role === 'PARENT') {
+      baseHrefs.add('/parent/lessons')
+      baseHrefs.add('/parent/enrollments')
+      baseHrefs.add('/parent/logopeds')
+      baseHrefs.add('/chat')
+    } else if (role === 'ACCOUNTANT' || role === 'ADMIN' || role === 'SUPER_ADMIN') {
+      baseHrefs.add('/admin/organizations')
+      baseHrefs.add('/admin/logopeds')
+      baseHrefs.add('/admin/clients')
+      baseHrefs.add('/admin/org-requests')
+    }
+
+    // кандидаты для панели «Ещё» по ролям
+    const candidates: { href: string; label: string; right?: React.ReactNode }[] = []
+    if (role === 'LOGOPED') {
+      candidates.push({ href: '/logoped', label: 'Главная' })
+      candidates.push({ href: '/logoped/notifications', label: 'Уведомления' })
+      candidates.push({ href: '/logoped/clients', label: 'Клиенты' })
+      candidates.push({ href: '/chat', label: 'Чат' })
+      candidates.push({ href: '/logoped/finance', label: 'Финансы' })
+      candidates.push({ href: '/settings', label: 'Настройки' })
+      candidates.push({ href: '/settings/children', label: 'Дети' })
+      candidates.push({ href: '/settings', label: 'Настройки' })
+    } else if (role === 'ACCOUNTANT' || role === 'ADMIN' || role === 'SUPER_ADMIN') {
+      candidates.push({ href: '/admin', label: 'Админ', right: <PayoutsPendingBadge /> })
+      candidates.push({ href: '/admin/organizations', label: 'Организации' })
+      candidates.push({ href: '/admin/branches', label: 'Филиалы' })
+      candidates.push({ href: '/admin/logopeds', label: 'Логопеды' })
+      candidates.push({ href: '/admin/clients', label: 'Клиенты' })
+      candidates.push({ href: '/admin/org-requests', label: 'Заявки' })
+      candidates.push({ href: '/admin/users', label: 'Пользователи' })
+      candidates.push({ href: '/admin/payments', label: 'Платежи' })
+      candidates.push({ href: '/admin/finance', label: 'Финансы', right: <PayoutsPendingBadge /> })
+      candidates.push({ href: '/admin/audit', label: 'Аудит' })
+    }
+
+    const more = candidates.filter(c => !baseHrefs.has(c.href))
+
+    return (
+      <div className="fixed inset-0 z-30" onClick={() => setMoreOpen(false)}>
+        <div className="absolute inset-0 bg-black/30" />
+        <div className="absolute inset-x-0 bottom-0 rounded-t-2xl shadow-2xl p-4 space-y-2" style={{ background: 'var(--card-bg)', color: 'var(--card-text)' }}>
+          <div className="text-center font-semibold text-sm">Дополнительно</div>
+          <div className="grid grid-cols-2 gap-2 text-sm">
+            {more.map((m) => (
+              <Link key={m.href} href={m.href} className="btn flex items-center justify-between" onClick={() => setMoreOpen(false)}>
+                <span>{m.label}</span>
+                {m.right}
+              </Link>
+            ))}
+          </div>
+          <button className="btn w-full" onClick={() => setMoreOpen(false)}>
+            Закрыть
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <>
+      <div className={wrapClass} style={{ background: 'color-mix(in oklab, var(--background) 95%, transparent)', backdropFilter: 'blur(8px)' }}>
+        <div className={`grid ${role==='PARENT' ? 'grid-cols-5' : 'grid-cols-5'}`}>
+          {role === 'LOGOPED' && (
+            <>
+              <div className="relative">
+                <Link href="/logoped/schedule" className={commonClass}>
+                  <span aria-hidden className="text-[18px] leading-none">📅</span>
+                  <span>Расписание</span>
+                </Link>
+                <span className="absolute -top-1 right-3">
+                  <SchedulePendingBadge />
+                </span>
+              </div>
+              <Link href="/logoped/clients" className={commonClass}>
+                <span aria-hidden className="text-[18px] leading-none">👥</span>
+                <span>Клиенты</span>
+              </Link>
+              <div className="relative">
+                <Link href="/logoped/notifications" className={commonClass}>
+                  <span aria-hidden className="text-[18px] leading-none">🔔</span>
+                  <span>Уведомл.</span>
+                </Link>
+                <span className="absolute -top-1 right-3">
+                  <NotificationsBadge />
+                </span>
+              </div>
+              <div className="relative">
+                <Link href="/chat" className={commonClass}>
+                  <span aria-hidden className="text-[18px] leading-none">💬</span>
+                  <span>Чат</span>
+                </Link>
+                <span className="absolute -top-1 right-3">
+                  <ChatUnreadBadge />
+                </span>
+              </div>
+              <div className="relative">
+                <button className={commonClass} onClick={()=>setMoreOpen(true)}>
+                  <span aria-hidden className="text-[18px] leading-none">⋯</span>
+                  <span>Ещё</span>
+                </button>
+                <span className="absolute -top-1 right-3">
+                  <LogopedOrgFinanceBadge />
+                </span>
+              </div>
+            </>
+          )}
+          {(role === 'ACCOUNTANT' || role === 'ADMIN' || role === 'SUPER_ADMIN') && (
+            <>
+              <Link href="/admin/organizations" className={commonClass}>
+                <span aria-hidden className="text-[18px] leading-none">🏢</span>
+                <span>Организ.</span>
+              </Link>
+              <Link href="/admin/logopeds" className={commonClass}>
+                <span aria-hidden className="text-[18px] leading-none">🧑‍⚕️</span>
+                <span>Логопеды</span>
+              </Link>
+              <Link href="/admin/clients" className={commonClass}>
+                <span aria-hidden className="text-[18px] leading-none">👥</span>
+                <span>Клиенты</span>
+              </Link>
+              <Link href="/admin/org-requests" className={commonClass}>
+                <span aria-hidden className="text-[18px] leading-none">📨</span>
+                <span>Заявки</span>
+              </Link>
+              <div className="relative">
+                <button className={commonClass} onClick={()=>setMoreOpen(true)}>
+                  <span aria-hidden className="text-[18px] leading-none">⋯</span>
+                  <span>Ещё</span>
+                </button>
+                <span className="absolute -top-1 right-3">
+                  <PayoutsPendingBadge />
+                </span>
+              </div>
+            </>
+          )}
+          {role === 'PARENT' && (
+            <>
+              <Link href="/parent/lessons" className={commonClass}>
+                <span aria-hidden className="text-[18px] leading-none">📅</span>
+                <span>Занятия</span>
+              </Link>
+              <Link href="/parent/enrollments" className={commonClass}>
+                <span aria-hidden className="text-[18px] leading-none">📝</span>
+                <span>Запись</span>
+              </Link>
+              <Link href="/parent/logopeds" className={commonClass}>
+                <span aria-hidden className="text-[18px] leading-none">🧑‍⚕️</span>
+                <span>Логопеды</span>
+              </Link>
+              <div className="relative">
+                <Link href="/chat" className={commonClass}>
+                  <span aria-hidden className="text-[18px] leading-none">💬</span>
+                  <span>Чат</span>
+                </Link>
+                <span className="absolute -top-1 right-3">
+                  <ChatUnreadBadge />
+                </span>
+              </div>
+              <button className={commonClass} onClick={()=>setMoreOpen(true)}>
+                <span aria-hidden className="text-[18px] leading-none">⋯</span>
+                <span>Ещё</span>
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+      {moreOpen && <MorePanel />}
+    </>
+  )
+}

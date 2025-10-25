@@ -1,0 +1,891 @@
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { enrollChildToLesson,  cancelBooking, cancelEnrollment, generateSlotsNext4Weeks, extendSlots4Weeks, createConsultationRequest, approveConsultationRequest, rejectConsultationRequest, approveParentBooking, rejectParentBooking, createLesson } from './actions'
+import Link from 'next/link'
+import ExportWeekPhotoButton from '@/components/ExportWeekPhoto.client'
+import { markLessonCancelled } from '../lesson/[id]/actions'
+
+export default async function LogopedSchedulePage({ searchParams }: { searchParams: Promise<{ view?: string; weekOffset?: string; monthOffset?: string; viewUserId?: string; consult?: string; debug?: string }> }) {
+  const sp = await searchParams
+  const session = await getServerSession(authOptions)
+  const role = String((session?.user as { role?: string } | undefined)?.role || '')
+  if (!session || !['ADMIN','SUPER_ADMIN','LOGOPED'].includes(role)) return <div>Доступ запрещён</div>
+
+  const now = new Date()
+  const day = now.getDay() || 7 // Monday=1..Sunday=7
+  const offset = Number(sp.weekOffset || '0') || 0
+  const monday = new Date(now)
+  monday.setDate(now.getDate() - (day - 1))
+  if (offset) monday.setDate(monday.getDate() + offset * 7)
+  monday.setHours(0,0,0,0)
+  const sunday = new Date(monday)
+  sunday.setDate(monday.getDate() + 6)
+  sunday.setHours(23,59,59,999)
+
+  // try to use user settings if view not provided
+  const session2 = await getServerSession(authOptions)
+  const user = session2?.user as { id?: string; name?: string | null; email?: string | null; preferredScheduleView?: 'week'|'month' } | undefined
+  const selfId = String(user?.id || '')
+  // список подчинённых для режима руководителя
+  // Новая логика: руководитель организации видит всех логопедов своей компании; руководитель филиала — логопедов своего филиала.
+  // Старую схему через UserSupervisor используем как fallback, если нет роли руководителя.
+  const meFull = await prisma.user.findUnique({ where: { id: selfId }, include: { branch: { include: { company: true } } } })
+  const isOrgLeader = Boolean(meFull?.branch?.company?.ownerId === selfId)
+  const isBranchManager = Boolean(meFull?.branch?.managerId === selfId)
+  let subs: { subordinateId: string; subordinate: { id: string; name: string | null; email: string | null } }[] = []
+  if (isOrgLeader && meFull?.branch?.companyId) {
+    const users = await prisma.user.findMany({ where: { role: 'LOGOPED', branch: { companyId: meFull.branch.companyId } }, orderBy: { name: 'asc' } })
+    subs = users.filter(u => u.id !== selfId).map(u => ({ subordinateId: u.id, subordinate: { id: u.id, name: u.name, email: u.email } }))
+  } else if (isBranchManager && meFull?.branchId) {
+    const users = await prisma.user.findMany({ where: { role: 'LOGOPED', branchId: meFull.branchId }, orderBy: { name: 'asc' } })
+    subs = users.filter(u => u.id !== selfId).map(u => ({ subordinateId: u.id, subordinate: { id: u.id, name: u.name, email: u.email } }))
+  } else {
+    const legacy = await prisma.userSupervisor.findMany({ where: { supervisorId: selfId }, include: { subordinate: true } })
+    subs = legacy.map(r => ({ subordinateId: r.subordinateId, subordinate: { id: r.subordinate.id, name: r.subordinate.name, email: r.subordinate.email } }))
+  }
+  const subordinateIds = new Set<string>(subs.map(r => r.subordinateId || r.subordinate.id))
+  const targetUserId = (sp?.viewUserId && subordinateIds.has(sp.viewUserId)) ? sp.viewUserId! : selfId
+  const isSupervisorMode = targetUserId !== selfId
+  const preferred = user?.preferredScheduleView
+  const view = (sp?.view || preferred || 'week') as 'week'|'month'
+  const consultState = sp?.consult as string | undefined
+  const debug = String(sp?.debug || '') === '1'
+
+  // Загружаем пользователя из БД, чтобы брать сохранённые настройки слотов/перерывов
+  const dbUser = await prisma.user.findUnique({ where: { id: targetUserId } })
+
+  // Авто‑очистка прошедших "пустых" уроков (без записей/броней/оценок/заявок/операций)
+  const enableAutoClean = true
+  if (enableAutoClean) {
+    try {
+      const past = await prisma.lesson.findMany({
+        where: { logopedId: (user as { id?: string } | undefined)?.id, endsAt: { lt: new Date() } },
+        select: {
+          id: true,
+          _count: {
+            select: { enrolls: true, bookings: true, evaluations: true, consultationRequests: true, transactions: true, passUsages: true, payoutLinks: true }
+          }
+        }
+      })
+      const emptyIds = past.filter(p => {
+        const c = p._count as { enrolls: number; bookings: number; evaluations: number; consultationRequests: number; transactions: number; passUsages: number; payoutLinks: number }
+        return (c.enrolls||0)+(c.bookings||0)+(c.evaluations||0)+(c.consultationRequests||0)+(c.transactions||0)+(c.passUsages||0)+(c.payoutLinks||0) === 0
+      }).map(p => p.id)
+      if (emptyIds.length) {
+        for (const id of emptyIds) {
+          try { await prisma.lesson.delete({ where: { id } }) } catch {}
+        }
+      }
+    } catch {}
+  }
+
+  // For week view: ЖЁСТКИЕ границы недели (как в stable)
+  const weekStart = new Date(monday)
+  const weekEnd = new Date(sunday)
+  type LessonWithRels = {
+    id: string
+    startsAt: Date
+    endsAt: Date
+    enrolls: { status: string; childId: string | null; child: { id: string; firstName: string | null; lastName: string | null } | null }[]
+    bookings: { id: string; status: string; holder: string }[]
+    evaluations: { status: string; createdAt?: Date | string; childId?: string | null; child?: { firstName?: string | null; lastName?: string | null } | null; homeworkRating?: number | null; lessonRating?: number | null; behaviorRating?: number | null }[]
+    consultationRequests: { id: string; status: string; parentEmail: string; childLastName: string; childFirstName: string; note?: string | null }[]
+  }
+  const lessons = (await prisma.lesson.findMany({
+    where: {
+      logopedId: targetUserId,
+      startsAt: { gte: weekStart },
+      endsAt: { lte: weekEnd },
+    },
+    orderBy: { startsAt: 'asc' },
+    include: { enrolls: { include: { child: true } }, bookings: true, evaluations: { include: { child: true } }, consultationRequests: true },
+  })) as unknown as LessonWithRels[]
+
+  // Автоочистка просроченных PENDING-заявок консультаций для выбранного пользователя расписания
+  try {
+    await prisma.consultationRequest.updateMany({
+      where: { subordinateId: targetUserId, status: 'PENDING', lesson: { endsAt: { lt: new Date() } } },
+      data: { status: 'REJECTED', respondedAt: new Date() },
+    })
+  } catch {}
+
+  // Автоотмена просроченных бронирований (booking), если урок уже закончился
+  try {
+    await prisma.booking.updateMany({
+      where: { status: 'ACTIVE', lesson: { logopedId: targetUserId, endsAt: { lt: new Date() } } },
+      data: { status: 'CANCELLED', liquidatedAt: new Date() },
+    })
+  } catch {}
+
+  // Horizon: найти дату последнего слота для текущего логопеда
+  const latestLesson = await prisma.lesson.findFirst({ where: { logopedId: targetUserId }, orderBy: { endsAt: 'desc' } })
+  const latestEnd = latestLesson ? new Date(latestLesson.endsAt) : null
+  const daysLeft = latestEnd ? Math.ceil((latestEnd.getTime() - now.getTime()) / (1000*60*60*24)) : 0
+
+  // For month view
+  const mOff = Number(sp.monthOffset || '0') || 0
+  const baseMonth = new Date(now.getFullYear(), now.getMonth() + mOff, 1)
+  const firstDayMonth = new Date(baseMonth.getFullYear(), baseMonth.getMonth(), 1)
+  const lastDayMonth = new Date(baseMonth.getFullYear(), baseMonth.getMonth() + 1, 0)
+  lastDayMonth.setHours(23,59,59,999)
+  const monthLessons = (await prisma.lesson.findMany({
+    where: { startsAt: { gte: firstDayMonth }, endsAt: { lte: lastDayMonth }, logopedId: targetUserId },
+    orderBy: { startsAt: 'asc' },
+    include: { enrolls: { include: { child: true } }, bookings: true, evaluations: true },
+  })) as unknown as LessonWithRels[]
+
+  // Активные абонементы детей для текущего логопеда (одним запросом, по детям из уроков недели/месяца)
+  const childIdsSet = new Set<string>()
+  for (const l of lessons) {
+    const enr = (l.enrolls || []).find(en => en.status === 'ENROLLED')
+    const ch = enr?.child
+    if (ch?.id) childIdsSet.add(String(ch.id))
+  }
+  for (const l of monthLessons) {
+    const enr = (l.enrolls || []).find(en => en.status === 'ENROLLED')
+    const ch = enr?.child
+    if (ch?.id) childIdsSet.add(String(ch.id))
+  }
+  const childIds = Array.from(childIdsSet.values())
+  const passesRaw = childIds.length ? await prisma.pass.findMany({
+    where: { status: 'ACTIVE', logopedId: targetUserId, childId: { in: childIds } },
+    select: { childId: true, remainingLessons: true, totalLessons: true },
+  }) : []
+  const passByChild: Record<string, { remaining: number; total: number }> = {}
+  for (const p of passesRaw) {
+    const cid = String(p.childId)
+    const remaining = Number(p.remainingLessons || 0)
+    const total = Number(p.totalLessons || 0)
+    passByChild[cid] = { remaining, total }
+  }
+
+  // Load templates and blocked times for текущего логопеда
+  const templates = await prisma.workTemplate.findMany({ where: { userId: targetUserId }, orderBy: [{ dayOfWeek: 'asc' }, { startMinutes: 'asc' }] })
+  const blocked = await prisma.blockedTime.findMany({ where: { userId: targetUserId }, orderBy: { startsAt: 'asc' } })
+
+  // Настройки сетки слотов
+  const slotMin = dbUser?.scheduleSlotMinutes ?? 30
+  const breakMin = dbUser?.scheduleBreakMinutes ?? 0
+
+  // Дети для записи: только закреплённые за текущим логопедом и не в архиве
+  const children = isSupervisorMode ? [] as { id: string; firstName?: string | null; lastName?: string | null }[] : await prisma.child.findMany({ where: { logopedId: targetUserId, isArchived: false }, orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }] })
+
+  function generateSlotsForDay(date: Date) {
+    const dow = date.getDay() || 7
+    const intervals = templates.filter(t => t.dayOfWeek === dow)
+    const slots: { start: Date; end: Date }[] = []
+    for (const it of intervals) {
+      let cursor = new Date(date)
+      cursor.setHours(Math.floor(it.startMinutes/60), it.startMinutes%60, 0, 0)
+      const endDay = new Date(date)
+      endDay.setHours(Math.floor(it.endMinutes/60), it.endMinutes%60, 0, 0)
+      while (cursor < endDay) {
+        const s = new Date(cursor)
+        const e = new Date(s)
+        e.setMinutes(e.getMinutes() + slotMin)
+        if (e > endDay) break
+        slots.push({ start: new Date(s), end: new Date(e) })
+        cursor = new Date(e)
+        if (breakMin) cursor.setMinutes(cursor.getMinutes() + breakMin)
+      }
+    }
+    // Явная сортировка по времени старта слота
+    return slots.sort((a,b)=> a.start.getTime() - b.start.getTime())
+  }
+
+  function slotStatus(start: Date, end: Date): { kind: 'empty'|'free'|'busy'|'blocked'|'booked'; title?: string; lessonId?: string; bookingId?: string; childId?: string } {
+    const nowLocal = new Date()
+    const sd = new Date(start); const ed = new Date(end)
+    const today = new Date(nowLocal); today.setHours(0,0,0,0)
+    const sDay = new Date(sd); sDay.setHours(0,0,0,0)
+    // Сначала проверяем блокировки
+    const overlapBlocked = blocked.find(b => new Date(b.startsAt) < end && new Date(b.endsAt) > start)
+    if (overlapBlocked) return { kind: 'blocked', title: overlapBlocked.reason || 'Заблокировано' }
+    // Ищем урок для отображения: предпочтительно точное совпадение или совпадение по началу.
+    let lesson: LessonWithRels | undefined = lessons.find(l => new Date(l.startsAt).getTime() === start.getTime() && new Date(l.endsAt).getTime() === end.getTime())
+                 || lessons.find(l => new Date(l.startsAt).getTime() === start.getTime())
+    // Для ПРОШЕДШИХ слотов, если точного совпадения нет — допускаем пересечение,
+    // но только если у урока есть финальный статус (оценён/подтв./отменён), чтобы отобразить итоги в сетке.
+    if (!lesson) {
+      const isPastSlot = (sDay < today) || (sDay.getTime() === today.getTime() && ed < nowLocal)
+      if (isPastSlot) {
+        const overlapped = lessons.find(l => new Date(l.startsAt) < end && new Date(l.endsAt) > start)
+        const hasFinal = overlapped && Array.isArray(overlapped.evaluations)
+          ? overlapped.evaluations.some(ev => ['DONE','CANCELLED','CONFIRMED'].includes(ev.status))
+          : false
+        if (overlapped && hasFinal) {
+          lesson = overlapped
+        }
+      }
+    }
+    if (!lesson) {
+      // если слот в прошедшем дне, либо в текущем дне, но время слота вышло — показываем как прошедшее
+      if (sDay < today || (sDay.getTime() === today.getTime() && ed < nowLocal)) return { kind: 'empty', title: 'past' }
+      return { kind: 'empty' }
+    }
+    const enrolledActive = (lesson.enrolls || []).find(en => en.status === 'ENROLLED')
+    if (enrolledActive?.child) {
+      const childName = `${enrolledActive.child.lastName || ''} ${enrolledActive.child.firstName || ''}`
+      return { kind: 'busy', title: childName, lessonId: lesson.id, childId: (enrolledActive.childId || undefined) }
+    }
+    const activeBooking = (lesson.bookings || []).find(b => b.status === 'ACTIVE')
+    if (activeBooking) {
+      return { kind: 'booked', title: activeBooking.holder, lessonId: lesson.id, bookingId: activeBooking.id }
+    }
+    return { kind: 'free', lessonId: lesson.id }
+  }
+
+  return (
+    <div className="container space-y-3 py-3">
+      <div className="flex items-center justify-between">
+        <div className="flex gap-2 items-center">
+          {subs.length > 0 && (
+            <form method="get" className="flex items-center gap-2">
+              <input type="hidden" name="view" value={view} />
+              <input type="hidden" name="weekOffset" value={offset} />
+              <select name="viewUserId" defaultValue={targetUserId} className="input input-sm">
+                <option value={selfId}>Моё</option>
+                {subs.map((r) => (
+                  <option key={r.subordinate.id} value={r.subordinate.id}>{r.subordinate.name || r.subordinate.email}</option>
+                ))}
+              </select>
+              <button className="btn btn-outline btn-xs">Показать</button>
+            </form>
+          )}
+        </div>
+      </div>
+      {isSupervisorMode && (
+        <div className="rounded border p-3 bg-slate-50 text-slate-800">
+          <div className="text-sm">
+            Режим просмотра: <b>подчинённый</b>. Доступны только просмотр расписания и отправка заявок на консультацию.
+          </div>
+        </div>
+      )}
+      {/* убран подзаголовок с датами недели для компактности */}
+      {consultState && (
+        <div className={`rounded border p-3 ${consultState==='approved' ? 'bg-emerald-50 text-emerald-800' : consultState==='rejected' ? 'bg-amber-50 text-amber-900' : 'bg-indigo-50 text-indigo-900'}`}>
+          {consultState==='approved' && 'Заявка принята. Карточка может быть создана и ребёнок записан.'}
+          {consultState==='rejected' && 'Заявка отклонена.'}
+          {consultState==='sent' && 'Запрос консультации отправлен подчинённому.'}
+          {consultState==='sent_existing_parent_child_created' && 'Пользователь найден и родителю добавлен новый ребёнок. Запрос на консультацию отправлен.'}
+          {consultState==='sent_child_unarchived' && 'Карточка ребёнка разархивирована. Запрос на консультацию отправлен.'}
+          {consultState==='child_attached_elsewhere' && 'Нельзя создать заявку: ребёнок уже закреплён за другим логопедом.'}
+        </div>
+      )}
+
+      {debug && (() => {
+        const byDay: Record<string, number> = {}
+        for (const l of lessons) {
+          const d = new Date(l.startsAt)
+          const key = d.toISOString().slice(0,10)
+          byDay[key] = (byDay[key]||0)+1
+        }
+        return (
+          <div className="rounded border p-2 text-xs bg-yellow-50 text-yellow-800">
+            <div>DEBUG: lessons fetched this week = {lessons.length}</div>
+            <div className="flex flex-wrap gap-2 mt-1">
+              {Object.entries(byDay).map(([k,v]) => (<span key={k} className="inline-flex items-center gap-1 rounded border px-1.5 py-[1px]">{k}: {v}</span>))}
+            </div>
+          </div>
+        )
+      })()}
+
+      {view === 'week' ? (
+        <section className="section" key={`week-${offset}-${targetUserId}`} style={{ background: 'var(--card-bg)' }}>
+          {/* Row 1: toggle */}
+          <div className="mb-2 flex items-center justify-center sm:justify-end gap-1 flex-wrap">
+            <a href={`?view=week${isSupervisorMode?`&viewUserId=${targetUserId}`:''}`} className={`btn btn-xs ${String(view)==='week'?'btn-secondary':''}`}>Неделя</a>
+            <a href={`?view=month${isSupervisorMode?`&viewUserId=${targetUserId}`:''}`} className={`btn btn-xs ${String(view)==='month'?'btn-secondary':''}`}>Месяц</a>
+          </div>
+          {/* Row 2: navigation */}
+          <div className="mb-2 flex items-center justify-center sm:justify-end gap-1 flex-wrap">
+            <a href={`?weekOffset=${offset-1}${isSupervisorMode?`&viewUserId=${targetUserId}`:''}`} className="btn btn-outline btn-xs" style={{ padding: '2px 8px', fontSize: 11 }}>← Назад</a>
+            <a href={`?weekOffset=0${isSupervisorMode?`&viewUserId=${targetUserId}`:''}`} className="btn btn-outline btn-xs" style={{ padding: '2px 8px', fontSize: 11 }}>Сегодня</a>
+            <a href={`?weekOffset=${offset+1}${isSupervisorMode?`&viewUserId=${targetUserId}`:''}`} className="btn btn-outline btn-xs" style={{ padding: '2px 8px', fontSize: 11 }}>Вперёд →</a>
+          </div>
+          {!isSupervisorMode && (
+            <div className="mb-4 flex flex-wrap items-center gap-2 justify-center sm:justify-end">
+              <form action={generateSlotsNext4Weeks} className="flex items-end gap-2">
+                <div className="text-sm text-muted hidden sm:block">
+                  Сгенерировать слоты на 4 недели вперёд
+                </div>
+                <button className="btn btn-secondary btn-sm" title="Сгенерировать на 4 недели">Ген.</button>
+              </form>
+              {/* Фото недели */}
+              {view==='week' && offset<=1 && (
+                <ExportWeekPhotoButton
+                  targetSelector="#week-print"
+                  fileName={`week_${monday.toISOString().slice(0,10)}_${(user?.name||'logoped').replace(/\s+/g,'_')}`}
+                  header={{
+                    logoUrl: '/logo.png',
+                    title: String(user?.name || user?.email || 'Логопед'),
+                    subtitle: `${monday.toLocaleDateString('ru-RU')} — ${sunday.toLocaleDateString('ru-RU')}`,
+                  }}
+                />
+              )}
+              {/* Блокировка фото при уходе дальше, чем на 1 неделю */}
+              {view==='week' && offset>1 && (
+                <button className="btn btn-outline btn-sm" disabled title="Фото доступно для текущей и следующей недель">Фото</button>
+              )}
+            </div>
+          )}
+          {!isSupervisorMode && latestEnd && daysLeft <= 7 && (
+            <div className="mb-4 flex items-center justify-between rounded border p-3 bg-amber-50">
+              <div className="text-sm text-amber-800">Горизонт расписания заканчивается {latestEnd.toLocaleDateString('ru-RU')} (через {Math.max(daysLeft,0)} дн.). Продлить ещё на 4 недели?</div>
+              <form action={extendSlots4Weeks}>
+                <button className="btn btn-accent btn-sm">Продлить на 4 недели</button>
+              </form>
+            </div>
+          )}
+          <div id="week-export" className="grid gap-2 md:grid-cols-2 lg:grid-cols-3">
+            {Array.from({ length: 7 }).map((_, idx) => {
+              const d = new Date(monday)
+              d.setDate(monday.getDate() + idx)
+              const slots = generateSlotsForDay(d)
+              // Все уроки этого дня по факту из БД (независимо от шаблона)
+              const dayLessons = lessons.filter(l => {
+                const sd = new Date(l.startsAt)
+                const dd = new Date(d)
+                return sd.getFullYear()===dd.getFullYear() && sd.getMonth()===dd.getMonth() && sd.getDate()===dd.getDate()
+              })
+              // Если рабочее время не настроено — день не показываем
+              if (slots.length === 0 && dayLessons.length === 0) return null
+              // Рассчитываем видимые слоты: скрываем прошедшие пустые слоты без записей/броней/оценок
+              const visibleSlots = slots.filter((s) => {
+                const st = slotStatus(s.start, s.end)
+                const isPast = s.end < new Date()
+                if (st.kind === 'empty') return false
+                if (isPast) {
+                  // В прошлом показываем либо запланированные занятия (busy),
+                  // либо уже с финальным статусом оценки/отмены.
+                  if (st.kind === 'busy') return true
+                  if (st.lessonId) {
+                    const lessonObj = lessons.find(l => l.id === st.lessonId)
+                    const evals = (lessonObj?.evaluations || [])
+                    const hasFinal = evals.some(ev => ev.status === 'DONE' || ev.status === 'CANCELLED' || ev.status === 'CONFIRMED')
+                    if (hasFinal) return true
+                  }
+                  return false
+                }
+                // Будущие слоты: показываем любые кроме empty
+                return true
+              })
+              // Собираем extra-уроки, которые не попали в сетку
+              const coveredIds = new Set<string>(visibleSlots.map(v => (slotStatus(v.start, v.end).lessonId || '')))
+              const extra = dayLessons.filter(l => !coveredIds.has(l.id))
+
+              // Единый хронологический список
+              const combined = [
+                ...visibleSlots.map(s => ({ ts: s.start.getTime(), type: 'slot' as const, s })),
+                ...extra.map(x => ({ ts: new Date(x.startsAt).getTime(), type: 'extra' as const, x })),
+              ].sort((a,b)=> a.ts - b.ts)
+
+              return (
+                <div key={idx} className="card p-2" style={{ background: 'var(--card-bg)' }}>
+                  <div className="mb-1 text-sm font-semibold">
+                    {d.toLocaleDateString('ru-RU', { weekday: 'short', day: '2-digit', month: '2-digit' })}
+                  </div>
+                  <div className="space-y-1">
+                    {combined.map((it, i) => it.type==='slot' ? (()=>{
+                      const s = it.s
+                      const t1 = s.start.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+                      const t2 = s.end.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+                      const st = slotStatus(s.start, s.end)
+                      const isPast = s.end < new Date()
+                      if (st.kind === 'empty') {
+                        // Пустой будущий слот — дать возможность создать урок под него
+                        if (!isPast && !isSupervisorMode) {
+                          return (
+                            <div key={i} className="rounded border p-1 text-sm">
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="truncate">
+                                  <span className="font-medium">{t1}</span> — {t2}
+                                </div>
+                                <form action={createLesson}>
+                                  <input type="hidden" name="title" value="Занятие" />
+                                  <input type="hidden" name="startsAt" value={s.start.toISOString()} />
+                                  <input type="hidden" name="endsAt" value={s.end.toISOString()} />
+                                  <button className="btn btn-outline btn-xs">Создать слот</button>
+                                </form>
+                              </div>
+                            </div>
+                          )
+                        }
+                        return null
+                      }
+                      // Ниже — рендер непустых слотов
+                      const lessonObj = lessons.find(l => l.id === st.lessonId)
+                      const evals = (lessonObj?.evaluations || [])
+                      const consults = (lessonObj?.consultationRequests || [])
+                      const pendingConsult = consults.find(c => c.status === 'PENDING')
+                      const evCancelled = evals.some(ev => ev.status === 'CANCELLED')
+                      const doneList = evals.filter(ev => ev.status === 'DONE')
+                      const evDone = doneList.length > 0
+                      const confirmedList = evals.filter(ev => ev.status === 'CONFIRMED')
+                      const evConfirmed = confirmedList.length > 0
+                      const pickLast = <T extends { createdAt?: Date | string }>(arr: T[]): T | null => {
+                        if (!arr || arr.length === 0) return null
+                        const withTs = arr.filter(e => e && e.createdAt)
+                        if (withTs.length > 0) {
+                          return withTs.sort((a,b)=> new Date(a.createdAt as Date | string).getTime() - new Date(b.createdAt as Date | string).getTime()).slice(-1)[0]
+                        }
+                        return arr[0]
+                      }
+                      const lastEval = pickLast(doneList.length>0 ? doneList : confirmedList)
+                      const hasFinal = evDone || evCancelled || evConfirmed
+                      const enrolledActive = (lessonObj?.enrolls || []).find(en => en.status === 'ENROLLED')
+                      const formatName = (c: { firstName?: string | null; lastName?: string | null } | undefined) => c ? `${c.firstName || ''} ${((c.lastName||'').slice(0,1) || '')}.`.trim() : undefined
+                      const lessonChildName = enrolledActive?.child ? formatName(enrolledActive.child) : undefined
+                      const evalChildFromEval = (!lessonChildName && lastEval && lastEval.child) ? formatName(lastEval.child) : undefined
+                      const evalChildFromList = (!lessonChildName && !evalChildFromEval && lastEval?.childId) ? (() => {
+                        const found = (children || [])?.find(c => c.id === lastEval.childId)
+                        return formatName(found)
+                      })() : undefined
+                      const childDisplayName = lessonChildName || evalChildFromEval || evalChildFromList
+                      const needsEval = (isPast && st.kind==='busy' && !hasFinal)
+                      return (
+                        <>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="truncate">
+                            <span className="font-medium">{t1}</span>
+                            {childDisplayName && (
+                              <span className="ml-1 text-muted">
+                                {childDisplayName}
+                                {st.kind==='busy' && st.childId && passByChild[String(st.childId)] && (
+                                  <span className="ml-2 inline-flex items-center rounded px-1.5 py-[1px] text-[11px] font-medium bg-amber-100 text-amber-900 border border-amber-200">
+                                    Аб.: {passByChild[String(st.childId)].remaining}/{passByChild[String(st.childId)].total}
+                                  </span>
+                                )}
+                              </span>
+                            )}
+                            {st.kind==='booked' && <span className="ml-1 text-amber-700">Бронь</span>}
+                            {st.kind==='blocked' && <span className="ml-1 text-muted">{st.title}</span>}
+                            {pendingConsult && <span className="ml-1 text-indigo-700 text-xs">Запрос консультации</span>}
+                          </div>
+                          {/* Статусы прошедшего урока */}
+                          {needsEval && <span className="badge badge-red">Оценить</span>}
+                          {!needsEval && evDone && <span className="badge badge-green">Проведено</span>}
+                          {!needsEval && !evDone && evConfirmed && <span className="badge badge-blue">Подтверждено</span>}
+                          {!needsEval && evCancelled && <span className="badge badge-amber">Отменен</span>}
+                        </div>
+                        {(evDone || evConfirmed) && (() => {
+                          if (!lastEval) return null
+                          const vals = [lastEval.homeworkRating ?? undefined, lastEval.lessonRating ?? undefined, lastEval.behaviorRating ?? undefined].filter((v): v is number => typeof v === 'number')
+                          const avg = vals.length ? vals.reduce((a,b)=>a+b,0)/vals.length : 0
+                          const emoji = avg>=4.5 ? '😄' : avg>=3.5 ? '🙂' : avg>=2.5 ? '😐' : avg>=1.5 ? '🙁' : '😞'
+                          const color = (v: number) => v>=5? 'bg-emerald-600' : v>=4? 'bg-emerald-500' : v>=3? 'bg-amber-500' : v>=2? 'bg-orange-500' : 'bg-red-500'
+                          const chip = (label: string, v?: number) => (
+                            <div className="flex items-center gap-1" key={label}>
+                              <span className="text-[10px] text-muted">{label}</span>
+                              <span className={`inline-flex items-center justify-center rounded-full px-1.5 py-[1px] text-[11px] font-medium ${typeof v==='number'?`${color(v)} text-white`:'text-muted border'}`} aria-label={`${label}: ${typeof v==='number'?v:'нет'}`}>
+                                {typeof v==='number'? v : '—'}
+                              </span>
+                            </div>
+                          )
+                          return (
+                            <div className="mt-1 flex items-center justify-between">
+                              <div className="flex items-center gap-3 text-sm">
+                                {chip('Д/З', lastEval.homeworkRating ?? undefined)}
+                                {chip('Занятие', lastEval.lessonRating ?? undefined)}
+                                {chip('Поведение', lastEval.behaviorRating ?? undefined)}
+                              </div>
+                              <div className="ml-2 text-base" title={`Средняя: ${avg.toFixed(1)}`}>{emoji}</div>
+                            </div>
+                          )
+                        })()}
+                        {debug && (
+                          <div className="mt-1 text-[10px] text-muted">
+                            slotKind={st.kind} lessonId={st.lessonId||'-'} evDone={String(evDone)} evConf={String(evConfirmed)} evCanc={String(evCancelled)} hasEnroll={String(Boolean(enrolledActive))} evalChildId={String(lastEval?.childId||'')}
+                          </div>
+                        )}
+                        {/* Руководитель — создаёт запрос консультации в свободном слоте подчинённого */}
+                        {isSupervisorMode && st.kind==='free' && st.lessonId && !isPast && (
+                          <form action={createConsultationRequest} className="mt-1 grid gap-1 sm:grid-cols-5 items-end rounded border p-2" style={{ background: 'color-mix(in srgb, var(--card-bg) 85%, transparent)' }}>
+                            <input type="hidden" name="lessonId" value={st.lessonId} />
+                            <input type="hidden" name="subordinateId" value={targetUserId} />
+                            <div className="sm:col-span-2"><input name="parentEmail" placeholder="Email родителя" className="input input-sm" required /></div>
+                            <div><input name="childLastName" placeholder="Фамилия ребёнка" className="input input-sm" required /></div>
+                            <div><input name="childFirstName" placeholder="Имя ребёнка" className="input input-sm" required /></div>
+                            <div className="sm:col-span-5"><input name="note" placeholder="Комментарий (опц.)" className="input input-sm" /></div>
+                            <div className="sm:col-span-5"><button className="btn btn-primary btn-xs">Запросить</button></div>
+                          </form>
+                        )}
+                        {/* Подчинённый — видит входящий запрос и может принять/отклонить */}
+                        {!isSupervisorMode && pendingConsult && st.lessonId && (
+                          <div className="mt-1 rounded border p-2 bg-emerald-50">
+                            <div className="text-sm font-medium">Запрос консультации от руководителя</div>
+                            <div className="text-xs text-muted">Родитель: {pendingConsult.parentEmail} · Ребёнок: {pendingConsult.childLastName} {pendingConsult.childFirstName}</div>
+                            {pendingConsult.note && <div className="text-xs text-muted">Комментарий: {pendingConsult.note}</div>}
+                            <div className="mt-1 flex flex-wrap gap-2 items-end">
+                              <form action={approveConsultationRequest}>
+                                <input type="hidden" name="requestId" value={pendingConsult.id} />
+                                <button className="btn btn-secondary btn-xs">Принять</button>
+                              </form>
+                              <form action={rejectConsultationRequest}>
+                                <input type="hidden" name="requestId" value={pendingConsult.id} />
+                                <button className="btn btn-danger btn-xs">Отклонить</button>
+                              </form>
+                            </div>
+                          </div>
+                        )}
+                        {/* формы записи/брони */}
+                        {!isSupervisorMode && st.kind==='free' && st.lessonId && !isPast && (
+                          <form action={enrollChildToLesson} className="mt-2 flex items-center gap-2">
+                            <input type="hidden" name="lessonId" value={st.lessonId} />
+                            <select name="childId" className="input w-full">
+                              {children.map((c) => (
+                                <option key={c.id} value={c.id}>{c.lastName} {c.firstName}</option>
+                              ))}
+                            </select>
+                            <button className="btn btn-secondary btn-sm">Записать</button>
+                          </form>
+                        )}
+                        {!isSupervisorMode && st.kind==='free' && st.lessonId && !isPast && (
+                        )}
+                        {/* Прошедшие слоты — оценка только если был назначен ребёнок (busy) и нет финального статуса */}
+                        {!isSupervisorMode && st.lessonId && st.kind==='busy' && isPast && !(evDone || evCancelled) && (
+                          <div className="mt-1 flex items-center gap-2">
+                            <form action={markLessonCancelled}>
+                              <input type="hidden" name="lessonId" value={st.lessonId} />
+                              {st.childId && <input type="hidden" name="childId" value={st.childId} />}
+                              <button className="btn btn-warning btn-xs">Отменен</button>
+                            </form>
+                            <Link href={`/logoped/lesson/${st.lessonId}`} className="btn btn-primary btn-xs">Оценить</Link>
+                          </div>
+                        )}
+                        {!isSupervisorMode && st.kind==='booked' && st.bookingId && !isPast && (
+                          <div className="mt-1 flex items-center gap-2">
+                            <form action={approveParentBooking}>
+                              <input type="hidden" name="bookingId" value={st.bookingId} />
+                              <button className="btn btn-secondary btn-xs">Принять</button>
+                            </form>
+                            <form action={rejectParentBooking}>
+                              <input type="hidden" name="bookingId" value={st.bookingId} />
+                              <button className="btn btn-danger btn-xs">Отклонить</button>
+                            </form>
+                            <form action={cancelBooking}>
+                              <input type="hidden" name="bookingId" value={st.bookingId} />
+                              <button className="btn btn-outline btn-xs">Снять бронь</button>
+                            </form>
+                          </div>
+                        )}
+                        {!isSupervisorMode && st.kind==='busy' && st.lessonId && st.childId && !isPast && (
+                          <form action={cancelEnrollment} className="mt-1 flex items-center gap-2">
+                            <input type="hidden" name="lessonId" value={st.lessonId} />
+                            <input type="hidden" name="childId" value={st.childId} />
+                            <button className="btn btn-danger btn-xs">Отменить запись</button>
+                          </form>
+                        )}
+                        </>
+                      )
+                    })() : (()=>{
+                      // extra renderer (как раньше)
+                      type Evaluation = LessonWithRels['evaluations'][number]
+                      type Enroll = LessonWithRels['enrolls'][number]
+                      type Booking = LessonWithRels['bookings'][number]
+                      type ExtraLesson = Pick<LessonWithRels, 'id'|'startsAt'|'endsAt'|'enrolls'|'bookings'|'evaluations'>
+                      const x = it.x as ExtraLesson
+                      const t1 = new Date(x.startsAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+                      const evals = (x.evaluations || []) as Evaluation[]
+                      const evCancelled = evals.some(ev => ev.status === 'CANCELLED')
+                      const doneList = evals.filter(ev => ev.status === 'DONE')
+                      const evDone = doneList.length > 0
+                      const confirmedList = evals.filter(ev => ev.status === 'CONFIRMED')
+                      const evConfirmed = confirmedList.length > 0
+                      const hasFinal = evDone || evCancelled || evConfirmed
+                      const isPast = new Date(x.endsAt) < new Date()
+                      const hasEnroll = (x.enrolls || []).some((en: Enroll)=> en.status === 'ENROLLED')
+                      const activeEnroll = (x.enrolls || []).find((en: Enroll)=> en.status === 'ENROLLED')
+                      const hasActiveBooking = (x.bookings || []).some((b: Booking)=> b.status === 'ACTIVE')
+                      // child display for extra
+                      const enrolledActive = (x.enrolls || []).find((en: Enroll)=> en.status === 'ENROLLED')
+                      const formatName = (c: { firstName?: string | null; lastName?: string | null } | undefined) => c ? `${c.firstName || ''} ${((c.lastName||'').slice(0,1) || '')}.`.trim() : undefined
+                      const childFromEnroll = enrolledActive?.child ? formatName(enrolledActive.child) : undefined
+                      const childFromEval = (()=>{
+                        const list = doneList.length>0 ? doneList : confirmedList
+                        const withChild = list.find((e)=> e.child)
+                        if (withChild && withChild.child) return formatName(withChild.child)
+                        if (list[0]?.childId) {
+                          const found = (children || [])?.find(c => c.id === list[0]!.childId)
+                          return formatName(found)
+                        }
+                        return undefined
+                      })()
+                      const childDisplayName = childFromEnroll || childFromEval
+                        return (
+                          <div key={`extra-${x.id}-${i}`} className="rounded border p-1 text-sm bg-white/40">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="truncate"><span className="font-medium">{t1}</span>{childDisplayName && <span className="ml-1 text-muted">{childDisplayName}</span>}</div>
+                              {isPast && hasEnroll && !hasFinal && <span className="badge badge-red">Оценить</span>}
+                              {evDone && <span className="badge badge-green">Проведено</span>}
+                              {evConfirmed && <span className="badge badge-blue">Подтверждено</span>}
+                              {evCancelled && <span className="badge badge-amber">Отменен</span>}
+                            </div>
+                            {(evDone || evConfirmed) && (() => {
+                              const pickLast = <T extends { createdAt?: Date | string }>(arr: T[]) => {
+                                if (!arr || arr.length === 0) return null
+                                const withTs = arr.filter((e)=> e && (e as { createdAt?: Date | string }).createdAt)
+                                if (withTs.length > 0) {
+                                  return withTs.sort((a,b)=> new Date(String((b as { createdAt?: Date | string }).createdAt)).getTime() - new Date(String((a as { createdAt?: Date | string }).createdAt)).getTime())[0]
+                                }
+                                return arr[0]
+                              }
+                              const lastEval = pickLast(doneList.length>0 ? doneList : confirmedList)
+                              if (!lastEval) return null
+                              const vals = [lastEval.homeworkRating, lastEval.lessonRating, lastEval.behaviorRating].filter((v): v is number => typeof v === 'number')
+                              const avg = vals.length ? vals.reduce((a,b)=>a+b,0)/vals.length : 0
+                              const emoji = avg>=4.5 ? '😄' : avg>=3.5 ? '🙂' : avg>=2.5 ? '😐' : avg>=1.5 ? '🙁' : '😞'
+                              const color = (v: number) => v>=5? 'bg-emerald-600' : v>=4? 'bg-emerald-500' : v>=3? 'bg-amber-500' : v>=2? 'bg-orange-500' : 'bg-red-500'
+                              const chip = (label: string, v?: number) => (
+                                <div className="flex items-center gap-1" key={label}>
+                                  <span className="text-[10px] text-muted">{label}</span>
+                                  <span className={`inline-flex items-center justify-center rounded-full px-1.5 py-[1px] text-[11px] font-medium ${typeof v==='number'?`${color(v)} text-white`:'text-muted border'}`} aria-label={`${label}: ${typeof v==='number'?v:'нет'}`}>
+                                    {typeof v==='number'? v : '—'}
+                                  </span>
+                                </div>
+                              )
+                              return (
+                                <div className="mt-1 flex items-center justify-between">
+                                  <div className="flex items-center gap-3 text-sm">
+                                    {chip('Д/З', lastEval.homeworkRating ?? undefined)}
+                                    {chip('Занятие', lastEval.lessonRating ?? undefined)}
+                                    {chip('Поведение', lastEval.behaviorRating ?? undefined)}
+                                  </div>
+                                  <div className="ml-2 text-base" title={`Средняя: ${avg.toFixed(1)}`}>{emoji}</div>
+                                </div>
+                              )
+                            })()}
+                            {!isSupervisorMode && isPast && hasEnroll && !hasFinal && (
+                              <div className="mt-1 flex items-center gap-2">
+                                <form action={markLessonCancelled}>
+                                  <input type="hidden" name="lessonId" value={x.id} />
+                                  {activeEnroll?.childId && <input type="hidden" name="childId" value={activeEnroll.childId} />}
+                                  <button className="btn btn-warning btn-xs">Отменен</button>
+                                </form>
+                                <Link href={`/logoped/lesson/${x.id}`} className="btn btn-primary btn-xs">Оценить</Link>
+                              </div>
+                            )}
+                            {debug && (
+                              <div className="mt-1 text-[10px] text-muted">
+                                extra lessonId={x.id} evDone={String(evDone)} evConf={String(evConfirmed)} evCanc={String(evCancelled)} hasEnroll={String(hasEnroll)}
+                              </div>
+                            )}
+                            {!isSupervisorMode && !isPast && !hasEnroll && !hasActiveBooking && (
+                              <>
+                                <form action={enrollChildToLesson} className="mt-2 flex items-center gap-2">
+                                  <input type="hidden" name="lessonId" value={x.id} />
+                                  <select name="childId" className="input w-full">
+                                    {children.map((c) => (
+                                      <option key={c.id} value={c.id}>{c.lastName} {c.firstName}</option>
+                                    ))}
+                                  </select>
+                                  <button className="btn btn-secondary btn-xs">Записать</button>
+                                </form>
+                              </>
+                            )}
+                          </div>
+                        )
+                    })() )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+          {/* Скрытый контейнер для экспорта фото недели */}
+          <div id="week-print" style={{ display: 'none' }}>
+            <div style={{ display: 'flex', flexDirection: 'row', gap: 10 }}>
+              {Array.from({ length: 7 }).map((_, idx) => {
+                const d = new Date(monday)
+                d.setDate(monday.getDate() + idx)
+                const slots = generateSlotsForDay(d)
+                const nowTs = Date.now()
+                const dayLessons = lessons.filter(l => {
+                  const sd = new Date(l.startsAt)
+                  return sd.getFullYear()===d.getFullYear() && sd.getMonth()===d.getMonth() && sd.getDate()===d.getDate()
+                })
+                type PrintItem = { t: string; ts: number; text: string; kind: 'vacant'|'plan'|'approved'|'pending'|'past_done'|'past_not_done'; evalAvg?: number; emoji?: string }
+                const items: PrintItem[] = []
+                const covered = new Set<string>()
+                for (const s of slots) {
+                  const st = slotStatus(s.start, s.end)
+                  const isPast = s.end.getTime() < nowTs
+                  const t1 = s.start.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'})
+                  if (isPast) {
+                    if (st.lessonId) {
+                      const l = lessons.find(x=>x.id===st.lessonId)
+                      const evals = (l?.evaluations||[])
+                      const doneList = evals.filter(ev=>ev.status==='DONE')
+                      const confirmedList = evals.filter(ev=>ev.status==='CONFIRMED')
+                      const pickLast = <T extends { createdAt?: Date | string }>(arr: T[]) => { if(!arr||!arr.length) return null; const w=arr.filter(e=>e&&e.createdAt); return (w.length? w.sort((a,b)=>new Date(String(b.createdAt)).getTime()-new Date(String(a.createdAt)).getTime())[0] : arr[0]) }
+                      const lastEv = pickLast(doneList.length?doneList:confirmedList)
+                      let evalAvg:number|undefined, emoji:string|undefined
+                      if (lastEv) { const vals=[lastEv.homeworkRating,lastEv.lessonRating,lastEv.behaviorRating].filter((v): v is number=>typeof v==='number'); if (vals.length){evalAvg=vals.reduce((a,b)=>a+b,0)/vals.length; emoji=evalAvg>=4.5?'😄':evalAvg>=3.5?'🙂':evalAvg>=2.5?'😐':evalAvg>=1.5?'🙁':'😞'} }
+                      const en = (l?.enrolls||[]).find((en)=>en.status==='ENROLLED')
+                      const name = en?.child ? `${en.child.firstName||''} ${((en.child.lastName||'').slice(0,1)||'')}.` : (st.title||'')
+                      items.push({ t: t1, ts: s.start.getTime(), text: `${t1} ${name} ${doneList.length?'Оценён':'Не оценён'}`, kind: doneList.length?'past_done':'past_not_done', evalAvg, emoji })
+                      covered.add(st.lessonId)
+                    }
+                  } else {
+                    if (st.kind==='busy' && st.lessonId) {
+                      const l = lessons.find(x=>x.id===st.lessonId)
+                      const en = (l?.enrolls||[]).find((en)=>en.status==='ENROLLED')
+                      const name = en?.child ? `${en.child.firstName||''} ${((en.child.lastName||'').slice(0,1)||'')}.` : '—'
+                      items.push({ t: t1, ts: s.start.getTime(), text: `${t1} ${name} (План)`, kind: 'plan' })
+                      covered.add(st.lessonId)
+                    } else if (st.lessonId) {
+                      const l = lessons.find(x=>x.id===st.lessonId)
+                      const reqs = (l?.consultationRequests||[])
+                      const approved = reqs.find(r=>r.status==='APPROVED')
+                      const pending = reqs.find(r=>r.status==='PENDING')
+                      if (approved) {
+                        const childName = `${approved.childFirstName||''} ${((approved.childLastName||'').slice(0,1)||'')}.`.trim()
+                        items.push({ t: t1, ts: s.start.getTime(), text: `${t1} ${childName} (От руковод.)`, kind: 'approved' })
+                      } else if (pending) {
+                        const childName = `${pending.childFirstName||''} ${((pending.childLastName||'').slice(0,1)||'')}.`.trim()
+                        items.push({ t: t1, ts: s.start.getTime(), text: `${t1} ${childName} (ПОДТВЕРДИ)`, kind: 'pending' })
+                      } else {
+                        items.push({ t: t1, ts: s.start.getTime(), text: `${t1} Вакант`, kind: 'vacant' })
+                      }
+                      covered.add(st.lessonId)
+                    } else {
+                      items.push({ t: t1, ts: s.start.getTime(), text: `${t1} Вакант`, kind: 'vacant' })
+                    }
+                  }
+                }
+                // extra уроки вне сетки
+                dayLessons.filter(l=>!covered.has(l.id)).forEach((x)=>{
+                  const t1 = new Date(x.startsAt).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'})
+                  const isPast = new Date(x.endsAt).getTime() < nowTs
+                  if (isPast) {
+                    const done = Array.isArray(x.evaluations) && x.evaluations.some((ev)=>ev.status==='DONE')
+                    const en = (x.enrolls||[]).find((en)=>en.status==='ENROLLED')
+                    const name = en?.child ? `${en.child.firstName||''} ${((en.child.lastName||'').slice(0,1)||'')}.` : '—'
+                    items.push({ t: t1, ts: new Date(x.startsAt).getTime(), text: `${t1} ${name} ${done?'Оценён':'Не оценён'}`, kind: done?'past_done':'past_not_done' })
+                  } else {
+                    const en = (x.enrolls||[]).find((en)=>en.status==='ENROLLED')
+                    if (en?.child) {
+                      const name = `${en.child.firstName||''} ${((en.child.lastName||'').slice(0,1)||'')}.`
+                      items.push({ t: t1, ts: new Date(x.startsAt).getTime(), text: `${t1} ${name} (План)`, kind: 'plan' })
+                    } else {
+                      const reqs = (x.consultationRequests||[])
+                      const approved = reqs.find(r=>r.status==='APPROVED')
+                      const pending = reqs.find(r=>r.status==='PENDING')
+                      if (approved) {
+                        const childName = `${approved.childFirstName||''} ${((approved.childLastName||'').slice(0,1)||'')}.`.trim()
+                        items.push({ t: t1, ts: new Date(x.startsAt).getTime(), text: `${t1} ${childName} (От руковод.)`, kind: 'approved' })
+                      } else if (pending) {
+                        const childName = `${pending.childFirstName||''} ${((pending.childLastName||'').slice(0,1)||'')}.`.trim()
+                        items.push({ t: t1, ts: new Date(x.startsAt).getTime(), text: `${t1} ${childName} (ПОДТВЕРДИ)`, kind: 'pending' })
+                      } else {
+                        items.push({ t: t1, ts: new Date(x.startsAt).getTime(), text: `${t1} Вакант`, kind: 'vacant' })
+                      }
+                    }
+                  }
+                })
+                if (items.length===0) return null
+                items.sort((a,b)=> a.ts - b.ts)
+                return (
+                  <div key={`print-day-${idx}`} style={{ background: '#ffffff', border: '1px solid #E5E7EB', borderRadius: 10, padding: 8, minWidth: 220, boxShadow: '0 4px 12px rgba(0,0,0,0.06)' }}>
+                    <div style={{ fontWeight: 700, marginBottom: 6 }}>{d.toLocaleDateString('ru-RU', { weekday: 'short', day: '2-digit', month: '2-digit' })}</div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {items.map((it, i)=> {
+                        const bg = it.kind==='vacant' ? '#FEE2E2'
+                                  : it.kind==='plan' ? '#DCFCE7'
+                                  : it.kind==='approved' ? '#DBEAFE'
+                                  : it.kind==='pending' ? '#FEF3C7'
+                                  : it.kind==='past_done' ? '#F3F4F6'
+                                  : '#E5E7EB'
+                        const bd = it.kind==='vacant' ? '#FCA5A5'
+                                  : it.kind==='plan' ? '#86EFAC'
+                                  : it.kind==='approved' ? '#93C5FD'
+                                  : it.kind==='pending' ? '#FCD34D'
+                                  : '#D1D5DB'
+                        return (
+                          <div key={i} style={{ background: bg, border: `1px solid ${bd}`, borderRadius: 8, padding: '6px 8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
+                            <div style={{ fontWeight: 600, lineHeight: 1.2, whiteSpace: 'normal', overflow: 'visible', wordBreak: 'break-word' }}>{it.text}</div>
+                            {typeof it.evalAvg==='number' && it.emoji && (
+                              <div title={`Средняя: ${it.evalAvg.toFixed(1)}`}>{it.emoji}</div>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </section>
+      ) : null}
+
+      {view === 'month' && (
+        <section className="section" key={`month-${mOff}-${targetUserId}`} style={{ background: 'var(--card-bg)' }}>
+          {/* Row 1: toggle */}
+          <div className="mb-2 flex items-center justify-center sm:justify-between">
+            <h2 className="text-lg font-semibold hidden sm:block">Календарь месяца</h2>
+            <div className="flex items-center gap-1 flex-wrap justify-center">
+              <a href={`?view=week${isSupervisorMode?`&viewUserId=${targetUserId}`:''}`} className={`btn btn-xs`}>Неделя</a>
+              <a href={`?view=month${isSupervisorMode?`&viewUserId=${targetUserId}`:''}`} className={`btn btn-xs btn-secondary`}>Месяц</a>
+            </div>
+          </div>
+          {/* Row 2: navigation (short labels) */}
+          <div className="mb-2 flex items-center justify-center sm:justify-end gap-1 flex-wrap">
+            <a href={`?view=month&monthOffset=${mOff-1}${isSupervisorMode?`&viewUserId=${targetUserId}`:''}`} className="btn btn-outline btn-xs">← Пред.</a>
+            <a href={`?view=month&monthOffset=0${isSupervisorMode?`&viewUserId=${targetUserId}`:''}`} className="btn btn-outline btn-xs">Текущий</a>
+            <a href={`?view=month&monthOffset=${mOff+1}${isSupervisorMode?`&viewUserId=${targetUserId}`:''}`} className="btn btn-outline btn-xs">След. →</a>
+          </div>
+          {/* Подсказка о горизонте слотов */}
+          {!isSupervisorMode && latestEnd && latestEnd < lastDayMonth && (
+            <div className="mb-4 flex items-center justify-between rounded border p-3 bg-amber-50">
+              <div className="text-sm text-amber-800">Слоты сгенерированы до {latestEnd.toLocaleDateString('ru-RU')}. Продлить ещё на 4 недели?</div>
+              <form action={extendSlots4Weeks}>
+                <button className="btn btn-accent btn-sm">Продлить на 4 недели</button>
+              </form>
+            </div>
+          )}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+            {Array.from({ length: lastDayMonth.getDate() }, (_, i) => i + 1).map(d => {
+              const date = new Date(firstDayMonth.getFullYear(), firstDayMonth.getMonth(), d)
+              const dayLessons = monthLessons.filter(x => new Date(x.startsAt).getDate() === d)
+              return (
+                <div key={d} className="card" style={{ background: 'var(--card-bg)' }}>
+                  <div className="mb-2 text-sm font-semibold">{date.toLocaleDateString('ru-RU')}</div>
+                  {dayLessons.length === 0 ? (
+                    <div className="text-xs text-muted">Нет занятий</div>
+                  ) : (
+                    <ul className="space-y-1">
+                      {dayLessons.map(x => {
+                        const startsAt = new Date(x.startsAt)
+                        const endsAt = new Date(x.endsAt)
+                        const isPast = endsAt < now
+                        const enrolled = (x.enrolls?.[0]?.child) || null
+                        const hadDone = Array.isArray(x.evaluations) && x.evaluations.some((ev) => ev.status === 'DONE')
+                          const hasActiveBooking = Array.isArray(x.bookings) && x.bookings.some((b:any)=> b?.status==='ACTIVE')
+                          const markerColor = (isPast && hadDone) ? '#FACC15' : (enrolled ? '#10B981' : (hasActiveBooking ? '#3B82F6' : '#EF4444'))
+                        // прошедшие без состоявшегося занятия скрываем
+                        if (isPast && !hadDone) return null
+                        // имя и первая буква фамилии
+                        const name = enrolled ? `${enrolled.firstName} ${enrolled.lastName ? (enrolled.lastName[0] + '.') : ''}` : 'вакант'
+                        const timeStr = startsAt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+                        const green = isPast && hadDone
+                        return (
+                          <li key={x.id} className={`text-sm ${green ? 'text-emerald-700' : ''}`}>
+                            <span className="font-medium">{timeStr}</span>
+                            <span className="ml-2">{name}</span>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </section>
+      )}
+
+      
+    </div>
+  )
+}

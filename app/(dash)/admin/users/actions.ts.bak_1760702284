@@ -1,0 +1,130 @@
+"use server"
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { revalidatePath } from 'next/cache'
+import { Role } from '@prisma/client'
+
+function ensureSuperOrAdmin(session: any) {
+  const role = (session?.user as any)?.role
+  if (!session || !['ADMIN','SUPER_ADMIN'].includes(role)) throw new Error('Forbidden')
+}
+
+function ensureNotSuperTarget(targetRole: Role) {
+  if (targetRole === Role.SUPER_ADMIN) throw new Error('Forbidden: cannot modify SUPER_ADMIN')
+}
+
+async function getSessionAndEnsureAdmin() {
+  const session = await getServerSession(authOptions)
+  ensureSuperOrAdmin(session)
+  return session
+}
+
+async function getActorIdFromSession(session: any): Promise<string | undefined> {
+  const email = (session?.user as any)?.email as string | undefined
+  if (!email) return undefined
+  const me = await prisma.user.findUnique({ where: { email }, select: { id: true } })
+  return me?.id
+}
+
+export async function promoteToAdmin(formData: FormData): Promise<void> {
+  const session = await getSessionAndEnsureAdmin()
+  const id = String(formData.get('id') || '')
+  if (!id) return
+  const target = await prisma.user.findUnique({ where: { id }, select: { role: true } })
+  if (!target) return
+  ensureNotSuperTarget(target.role as Role)
+  await prisma.user.update({ where: { id }, data: { role: Role.ADMIN } })
+  const actorId = await getActorIdFromSession(session)
+  await prisma.auditLog.create({ data: { action: 'ROLE_ASSIGN_ADMIN', payload: JSON.stringify({ id }), actorId } })
+  revalidatePath('/admin/users')
+}
+
+export async function demoteAdmin(formData: FormData): Promise<void> {
+  const session = await getSessionAndEnsureAdmin()
+  const id = String(formData.get('id') || '')
+  if (!id) return
+  const target = await prisma.user.findUnique({ where: { id }, select: { role: true } })
+  if (!target) return
+  ensureNotSuperTarget(target.role as Role)
+  await prisma.user.update({ where: { id }, data: { role: Role.PARENT } })
+  const actorId = await getActorIdFromSession(session)
+  await prisma.auditLog.create({ data: { action: 'ROLE_REVOKE_ADMIN', payload: JSON.stringify({ id }), actorId } })
+  revalidatePath('/admin/users')
+}
+
+export async function promoteToAccountant(formData: FormData): Promise<void> {
+  const session = await getSessionAndEnsureAdmin()
+  const id = String(formData.get('id') || '')
+  if (!id) return
+  const target = await prisma.user.findUnique({ where: { id }, select: { role: true } })
+  if (!target) return
+  ensureNotSuperTarget(target.role as Role)
+  await prisma.user.update({ where: { id }, data: { role: Role.ACCOUNTANT } })
+  const actorId = await getActorIdFromSession(session)
+  await prisma.auditLog.create({ data: { action: 'ROLE_ASSIGN_ACCOUNTANT', payload: JSON.stringify({ id }), actorId } })
+  revalidatePath('/admin/users')
+}
+
+export async function demoteAccountant(formData: FormData): Promise<void> {
+  const session = await getSessionAndEnsureAdmin()
+  const id = String(formData.get('id') || '')
+  if (!id) return
+  const target = await prisma.user.findUnique({ where: { id }, select: { role: true } })
+  if (!target) return
+  ensureNotSuperTarget(target.role as Role)
+  await prisma.user.update({ where: { id }, data: { role: Role.PARENT } })
+  const actorId = await getActorIdFromSession(session)
+  await prisma.auditLog.create({ data: { action: 'ROLE_REVOKE_ACCOUNTANT', payload: JSON.stringify({ id }), actorId } })
+  revalidatePath('/admin/users')
+}
+
+export async function updateUserRole(formData: FormData): Promise<void> {
+  const session = await getServerSession(authOptions)
+  ensureSuperOrAdmin(session)
+  const id = String(formData.get('id') || '')
+  const roleStr = String(formData.get('role') || '')
+  if (!id || !roleStr) return
+  // Validate role against Prisma enum
+  if (!Object.values(Role).includes(roleStr as Role)) return
+  await prisma.user.update({ where: { id }, data: { role: roleStr as Role } })
+  revalidatePath('/admin/users')
+}
+
+async function setVipInternal(id: string, kind: 'VIP' | 'VIP+'): Promise<void> {
+  const session = await getSessionAndEnsureAdmin()
+  if (!id) return
+  const target = await prisma.user.findUnique({ where: { id }, select: { role: true } })
+  if (!target) return
+  ensureNotSuperTarget(target.role as Role)
+  if (target.role !== Role.LOGOPED) return
+  const data: any = kind === 'VIP+' ? { featuredSuper: true, featured: true } : { featured: true, featuredSuper: false }
+  await prisma.user.update({ where: { id }, data })
+  const actorId = await getActorIdFromSession(session)
+  await prisma.auditLog.create({ data: { action: kind === 'VIP+' ? 'VIP_SET_SUPER' : 'VIP_SET', payload: JSON.stringify({ id }), actorId } })
+  revalidatePath('/admin/users')
+}
+
+export async function setVip(formData: FormData): Promise<void> {
+  const id = String(formData.get('id') || '')
+  await setVipInternal(id, 'VIP')
+}
+
+export async function setVipPlus(formData: FormData): Promise<void> {
+  const id = String(formData.get('id') || '')
+  await setVipInternal(id, 'VIP+')
+}
+
+export async function clearVip(formData: FormData): Promise<void> {
+  const session = await getSessionAndEnsureAdmin()
+  const id = String(formData.get('id') || '')
+  if (!id) return
+  const target = await prisma.user.findUnique({ where: { id }, select: { role: true } })
+  if (!target) return
+  ensureNotSuperTarget(target.role as Role)
+  if (target.role !== Role.LOGOPED) return
+  await prisma.user.update({ where: { id }, data: { featured: false, featuredSuper: false } })
+  const actorId = await getActorIdFromSession(session)
+  await prisma.auditLog.create({ data: { action: 'VIP_CLEAR', payload: JSON.stringify({ id }), actorId } })
+  revalidatePath('/admin/users')
+}

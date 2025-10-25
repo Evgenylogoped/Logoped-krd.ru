@@ -1,0 +1,52 @@
+const path = require('path')
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  eslint: {
+    // Do not fail the production build if ESLint errors are present.
+    ignoreDuringBuilds: true,
+  },
+  // Explicitly set tracing root to this project to avoid picking parent lockfiles
+  outputFileTracingRoot: path.join(__dirname),
+  async headers() {
+    const longCache = 'public, max-age=31536000, immutable'
+    const shortCache = 'public, max-age=3600'
+    return [
+      // Next.js generated static assets
+      {
+        source: '/_next/static/:path*',
+        headers: [
+          { key: 'Cache-Control', value: longCache },
+        ],
+      },
+      // Public icons and images
+      {
+        source: '/icons/:path*',
+        headers: [
+          { key: 'Cache-Control', value: longCache },
+        ],
+      },
+      {
+        source: '/screens/:path*',
+        headers: [
+          { key: 'Cache-Control', value: longCache },
+        ],
+      },
+      // PWA files
+      {
+        source: '/manifest.json',
+        headers: [
+          { key: 'Cache-Control', value: shortCache },
+          { key: 'Content-Type', value: 'application/manifest+json' },
+        ],
+      },
+      {
+        source: '/sw.js',
+        headers: [
+          { key: 'Cache-Control', value: shortCache },
+        ],
+      },
+    ]
+  },
+}
+
+module.exports = nextConfig

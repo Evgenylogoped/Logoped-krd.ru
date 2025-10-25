@@ -1,0 +1,277 @@
+import { getServerSession } from "next-auth"
+import { authOptions } from "@/lib/auth"
+import { prisma } from "@/lib/prisma"
+import Link from "next/link"
+import LogopedPreviewTrigger from "@/components/LogopedPreview"
+import { cancelBookingParent, cancelEnrollmentParent } from "@/app/(dash)/parent/enrollments/actions"
+
+export const revalidate = 0
+
+export default async function ParentLessonsPage({ searchParams }: { searchParams?: Promise<{ tab?: string; child?: string; from?: string; to?: string; status?: string; cancelledBooking?: string; cancelledEnrollment?: string }> }) {
+  const session = await getServerSession(authOptions)
+  const role = (session?.user as any)?.role
+  if (!session || role !== 'PARENT') {
+    return (
+      <div className="container py-8">
+        <h1 className="text-2xl font-bold">Занятия (родитель)</h1>
+        <p className="text-sm text-muted mt-2">Доступно только для роли Родитель.</p>
+      </div>
+    )
+  }
+
+  const userId = (session.user as any).id as string
+  const parent = await prisma.parent.findUnique({ where: { userId }, include: { children: true } })
+  const childOptions = (parent?.children ?? []).map(c => ({ id: c.id, name: `${c.lastName} ${c.firstName}` }))
+  const sp = (searchParams ? await searchParams : {}) as { tab?: string; child?: string; from?: string; to?: string; status?: string; cancelledBooking?: string; cancelledEnrollment?: string }
+  const childFilter = sp?.child && childOptions.some(c=>c.id===sp.child) ? sp.child : undefined
+
+  const tab = sp?.tab === 'past' ? 'past' : 'future'
+  const statusFilter = (sp?.status === 'pending' || sp?.status === 'confirmed') ? sp.status as 'pending'|'confirmed' : 'all'
+  const now = new Date()
+
+  let fromDate: Date | undefined
+  let toDate: Date | undefined
+  if (tab === 'past') {
+    if (sp?.from) { fromDate = new Date(sp.from); fromDate.setHours(0,0,0,0) }
+    if (sp?.to) { toDate = new Date(sp.to); toDate.setHours(23,59,59,999) }
+  }
+
+  const whereCommon: any = {
+    status: 'ENROLLED',
+    childId: childFilter ? childFilter : { in: (parent?.children ?? []).map(c=>c.id) },
+  }
+
+  const where = tab === 'future'
+    ? { ...whereCommon, lesson: { startsAt: { gte: now } } }
+    : { ...whereCommon, lesson: { AND: [ { endsAt: { lt: now } }, ...(fromDate ? [{ startsAt: { gte: fromDate } }] : []), ...(toDate ? [{ endsAt: { lte: toDate } }] : []) ] } }
+
+  const items = await prisma.enrollment.findMany({
+    where,
+    include: {
+      lesson: {
+        include: {
+          logoped: true,
+          group: { include: { branch: { include: { company: true } } } },
+          evaluations: true,
+        },
+      },
+      child: true,
+    },
+    orderBy: { lesson: { startsAt: tab==='future' ? 'asc' : 'desc' } },
+    take: 200,
+  })
+
+  // Для будущих занятий подмешиваем активные брони (ожидают подтверждения логопедом)
+  const bookings = tab === 'future'
+    ? await (prisma as any).booking.findMany({
+        where: {
+          status: 'ACTIVE',
+          childId: { in: (parent?.children ?? []).map(c => c.id) },
+          lesson: { startsAt: { gte: now } },
+        },
+        include: {
+          lesson: { include: { logoped: true, group: { include: { branch: { include: { company: true } } } } } },
+          child: true,
+        },
+        orderBy: { lesson: { startsAt: 'asc' } },
+        take: 200,
+      })
+    : []
+
+  // Объединяем записи и брони в единую ленту с типом
+  let records = [
+    ...(items as any[]).map(e => ({ kind: 'enrollment' as const, data: e })),
+    ...(bookings as any[]).map(b => ({ kind: 'booking' as const, data: b })),
+  ].sort((a, b) => new Date(a.data.lesson.startsAt).getTime() - new Date(b.data.lesson.startsAt).getTime())
+
+  if (tab === 'future' && statusFilter !== 'all') {
+    records = records.filter(r => statusFilter === 'pending' ? r.kind === 'booking' : r.kind === 'enrollment')
+  }
+
+  const groups = new Map<string, any[]>()
+  for (const r of records) {
+    const d = new Date(r.data.lesson.startsAt)
+    d.setHours(0,0,0,0)
+    const key = d.toISOString()
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key)!.push(r)
+  }
+
+  return (
+    <div className="container py-8 space-y-6">
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Занятия</h1>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Link href={`/parent/lessons?tab=future${childFilter?`&child=${childFilter}`:''}${statusFilter!=='all'?`&status=${statusFilter}`:''}`} className={`btn ${tab==='future' ? 'btn-primary' : ''}`}>Запланированные</Link>
+        <Link href={`/parent/lessons?tab=past${childFilter?`&child=${childFilter}`:''}`} className={`btn ${tab==='past' ? 'btn-primary' : ''}`}>Прошедшие</Link>
+      </div>
+
+      <form className="flex flex-wrap items-end gap-2" method="get">
+        <input type="hidden" name="tab" value={tab} />
+        <div>
+          <label className="block text-sm mb-1">Ребёнок</label>
+          <select name="child" defaultValue={childFilter || ''} className="input !py-2 !px-2 min-w-[200px]">
+            <option value="">Все дети</option>
+            {childOptions.map(c => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+        </div>
+        {tab==='future' && (
+          <div>
+            <label className="block text-sm mb-1">Статус</label>
+            <select name="status" defaultValue={statusFilter} className="input !py-2 !px-2 min-w-[200px]">
+              <option value="all">Все</option>
+              <option value="pending">Ожидает подтверждения</option>
+              <option value="confirmed">Подтверждено</option>
+            </select>
+          </div>
+        )}
+        {tab==='past' && (
+          <>
+            <div>
+              <label className="block text-sm mb-1">С</label>
+              <input type="date" name="from" defaultValue={sp?.from || ''} className="input" />
+            </div>
+            <div>
+              <label className="block text-sm mb-1">По</label>
+              <input type="date" name="to" defaultValue={sp?.to || ''} className="input" />
+            </div>
+          </>
+        )}
+        <button className="btn">Показать</button>
+      </form>
+
+      <section className="section">
+        {sp?.cancelledBooking && (
+          <div className="rounded border p-3 bg-amber-50 text-amber-900 mb-3">Заявка отменена.</div>
+        )}
+        {sp?.cancelledEnrollment && (
+          <div className="rounded border p-3 bg-amber-50 text-amber-900 mb-3">Запись отменена.</div>
+        )}
+        {items.length === 0 && (
+          <div className="text-sm text-muted">Нет занятий по выбранным условиям</div>
+        )}
+        {Array.from(groups.entries()).map(([k, arr]) => {
+          const day = new Date(k)
+          return (
+            <div key={k} className="mb-4">
+              <div className="font-semibold text-sm text-muted mb-2">{day.toLocaleDateString('ru-RU')}</div>
+              <div className="grid gap-3">
+                {arr.map((r:any) => {
+                  const e = r.data
+                  const l = e.lesson
+                  const logoped = l.logoped
+                  const branch = l.group?.branch
+                  const place = branch?.name || ''
+                  const evs = (l.evaluations || []) as any[]
+                  const publicEvs = evs.filter(ev => ev.status === 'DONE' && ev.showToParent)
+                  const cancelled = evs.some(ev => ev.status === 'CANCELLED')
+                  const starts = new Date(l.startsAt)
+                  const ends = new Date(l.endsAt)
+                  const durMin = Math.max(0, Math.round((ends.getTime()-starts.getTime())/60000))
+                  return (
+                    <div key={`${r.kind==='enrollment' ? `${e.childId}:${e.lessonId}` : `booking:${e.id}`}`} className={`rounded-md p-2 ${r.kind==='booking' ? 'border-l-4 border-amber-400' : 'border'} border-gray-200`} style={{ background: 'var(--card-bg)' }}> 
+                      {/* Шапка: фото ребёнка • инфо • логопед • статус */}
+                      <div className="flex items-center justify-between gap-2">
+                        {/* Слева: фото ребёнка и инфо */}
+                        <div className="flex items-center gap-2 min-w-0">
+                          <img src={(e.child as any)?.photoUrl || '/avatar-child.svg'} alt="Ребёнок" className="h-12 w-12 rounded-md object-cover" />
+                          <div className="min-w-0">
+                            <div className="text-[15px] leading-tight"><span className="text-muted">Занятие в</span> {starts.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'})}</div>
+                            <div className="text-[11px] text-muted truncate">
+                              {e.child.firstName} {((e.child.lastName||'').trim().charAt(0) || '').toUpperCase()}.
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Справа: логопед и статус */}
+                        <div className="flex items-center gap-2 shrink-0">
+                          <LogopedPreviewTrigger name={logoped?.name || logoped?.email || 'Логопед'} image={logoped?.image} actionHref={logoped?.id ? `/chat?to=${logoped.id}&child=${e.childId}` : undefined} actionLabel={logoped?.id ? 'Написать' : undefined}>
+                            <span className="inline-flex items-center gap-1 min-w-0">
+                              <img src={logoped?.image || '/avatar-user.svg'} alt="Логопед" className="h-9 w-9 rounded-md object-cover" />
+                              <span className="hidden sm:inline truncate max-w-[160px]">{logoped?.name || logoped?.email || 'Логопед'}</span>
+                            </span>
+                          </LogopedPreviewTrigger>
+                          <div className="hidden sm:block">
+                            {tab==='future' ? (
+                              r.kind==='booking' ? (
+                                <span className="badge badge-amber text-[10px] inline-flex items-center gap-1">⏳ <span>Ожидает</span></span>
+                              ) : (
+                                <span className="badge badge-blue text-[10px]">Подтверждено</span>
+                              )
+                            ) : (
+                              <span className={`badge text-[10px] ${cancelled ? 'badge-red' : 'badge-green'}`}>{cancelled ? 'Не состоялось' : 'Состоялось'}</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Мобильный статус под шапкой */}
+                      <div className="sm:hidden mt-1">
+                        {tab==='future' ? (
+                          r.kind==='booking' ? (
+                            <span className="badge badge-amber text-[10px] inline-flex items-center gap-1">⏳ <span>Ожидает</span></span>
+                          ) : (
+                            <span className="badge badge-blue text-[10px]">Подтверждено</span>
+                          )
+                        ) : (
+                          <span className={`badge text-[10px] ${cancelled ? 'badge-red' : 'badge-green'}`}>{cancelled ? 'Не состоялось' : 'Состоялось'}</span>
+                        )}
+                      </div>
+
+                      {/* Место */}
+                      {place && (
+                        <div className="mt-0.5 text-[10px] text-muted truncate hidden sm:block" title={place}>📍 {place}</div>
+                      )}
+
+                      {/* Действия */}
+                      {tab==='future' && r.kind==='booking' && (
+                        <div className="mt-1.5">
+                          <form action={cancelBookingParent} className="grid gap-1 sm:flex sm:items-center sm:justify-end">
+                            <input type="hidden" name="bookingId" value={e.id} />
+                            <input name="reason" className="input input-xs w-full sm:w-40" placeholder="Причина (опц.)" />
+                            <button className="btn btn-outline btn-xs sm:ml-1">Отменить</button>
+                          </form>
+                        </div>
+                      )}
+
+                      {tab==='future' && r.kind==='enrollment' && (
+                        <div className="mt-1.5">
+                          <form action={cancelEnrollmentParent} className="grid gap-1 sm:flex sm:items-center sm:justify-end">
+                            <input type="hidden" name="childId" value={e.childId} />
+                            <input type="hidden" name="lessonId" value={e.lessonId} />
+                            <input name="reason" className="input input-xs w-full sm:w-40" placeholder="Причина (опц.)" />
+                            <button className="btn btn-outline btn-xs sm:ml-1">Отменить</button>
+                          </form>
+                        </div>
+                      )}
+
+                      {tab==='past' && publicEvs.length > 0 && (
+                        <details className="mt-1.5 text-[11px]">
+                          <summary className="cursor-pointer text-muted">Оценка логопеда</summary>
+                          <div className="mt-1 rounded border p-2 bg-gray-50">
+                            {publicEvs.map((ev, idx) => (
+                              <div key={idx} className="grid gap-1 sm:grid-cols-4">
+                                <div>Д/З: {ev.homeworkRating ?? '—'}</div>
+                                <div>Занятие: {ev.lessonRating ?? '—'}</div>
+                                <div>Поведение: {ev.behaviorRating ?? '—'}</div>
+                                <div className="sm:col-span-4 text-muted">Комментарий: {ev.comment || '—'}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </details>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )
+        })}
+      </section>
+    </div>
+  )
+}

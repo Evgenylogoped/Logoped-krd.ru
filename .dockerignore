@@ -1,0 +1,35 @@
+# VCS
+.git
+.gitignore
+.gitattributes
+
+# Node
+node_modules
+npm-debug.log*
+yarn.lock
+pnpm-lock.yaml
+
+# Next.js
+.next
+out
+
+# Tests and reports
+playwright-report
+test-results
+coverage
+*.log
+
+# Temp, caches
+.tmp
+.tmp/**
+.cache
+.DS_Store
+
+# Backups/archives
+backups
+backups/**
+*.tgz
+*.zip
+
+# Docker backups
+Dockerfile.bak*

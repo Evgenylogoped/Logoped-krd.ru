@@ -1,0 +1,265 @@
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import Image from 'next/image'
+import LogopedPreviewTrigger from '@/components/LogopedPreview'
+import VipBadge from '@/components/VipBadge'
+import { getOrCreateConversation } from '@/app/chat/chatService'
+import Link from 'next/link'
+import { assignChildToLogoped, detachChildFromLogoped, requestTransferByEmail } from './actions'
+
+export const revalidate = 0
+export const runtime = 'nodejs'
+
+export default async function ParentLogopedsPage({ searchParams }: { searchParams?: Promise<{ saved?: string; transfer?: string }> }) {
+  const session = await getServerSession(authOptions)
+  if (!session?.user) return <div className="py-6">Доступ запрещён</div>
+  const userId = (session.user as any).id as string
+  const parent = await prisma.parent.findUnique({
+    where: { userId },
+    include: {
+      children: {
+        where: { isArchived: false },
+        include: {
+          logoped: {
+            select: {
+              id: true,
+              name: true,
+              image: true,
+              specialization: true,
+              lessonPrice: true,
+              showPriceToParents: true,
+              about: true,
+              education: true,
+              hideAboutFromParents: true,
+              hideEducationFromParents: true,
+              profession: true,
+              experienceYears: true,
+              city: true,
+              address: true,
+              isOnline: true,
+              isOffline: true,
+              featured: true,
+              featuredSuper: true,
+              branch: { include: { company: true } },
+            },
+          },
+        },
+      },
+    },
+  })
+  if (!parent) return <div className="py-6">Родитель не найден</div>
+
+  const children = parent.children
+  // Группируем детей по их логопедам
+  const byLogoped = new Map<string, { logoped: any, kids: any[] }>()
+  const noLogopedKids: any[] = []
+  for (const c of children) {
+    if (c.logoped) {
+      const key = c.logoped.id
+      const group = byLogoped.get(key) || { logoped: c.logoped, kids: [] }
+      group.kids.push(c)
+      byLogoped.set(key, group)
+    } else {
+      noLogopedKids.push(c)
+    }
+  }
+
+  const groups = Array.from(byLogoped.values())
+  // Prepare conversations ids for direct links
+  const convByKidId: Record<string, string> = {}
+  for (const g of groups) {
+    const logoped = g.logoped
+    if (!logoped?.id) continue
+    for (const kid of g.kids) {
+      const conv = await getOrCreateConversation(userId, String(logoped.id), String(kid.id))
+      if (conv?.id) convByKidId[String(kid.id)] = String(conv.id)
+    }
+  }
+
+  // Получим список логопедов для выбора (простая версия: все активные логопеды)
+  const allLogopeds = await prisma.user.findMany({
+    where: { role: 'LOGOPED' },
+    select: { id: true, name: true, branch: { select: { name: true, company: { select: { name: true } } } } },
+    orderBy: { name: 'asc' }
+  })
+
+  const sp = (searchParams ? await searchParams : {}) as { saved?: string; transfer?: string }
+  return (
+    <div className="space-y-6 px-4 md:px-6 lg:px-8">
+      <div>
+        <h1 className="text-2xl font-bold">Логопеды</h1>
+        <div className="text-sm text-muted mt-1">Здесь вы видите логопедов ваших детей и можете пригласить нового логопеда.</div>
+      </div>
+      {sp?.saved === '1' && (
+        <div className="rounded border p-3 bg-emerald-50 text-emerald-800 text-sm">Изменения сохранены</div>
+      )}
+      {sp?.transfer === 'ok' && (
+        <div className="rounded border p-3 bg-emerald-50 text-emerald-800 text-sm">Заявка отправлена логопеду</div>
+      )}
+      {sp?.transfer === 'notfound' && (
+        <div className="rounded border p-3 bg-red-50 text-red-800 text-sm">Логопед с таким email не найден</div>
+      )}
+
+      {/* Если дети у одного логопеда — одна карточка, иначе — по логопеду */}
+      {groups.length > 0 && (
+        <div className="grid gap-4 md:grid-cols-2">
+          {groups.map(({ logoped, kids }) => (
+            <div key={logoped.id} className="rounded-lg shadow-sm p-4" style={{ background: 'var(--card-bg)' }}>
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex items-start gap-3">
+                  <LogopedPreviewTrigger name={logoped.name || 'Без имени'} image={logoped.image} phone={(logoped as any).phone} isOnline={(logoped as any).isOnline} isOffline={(logoped as any).isOffline} lessonPrice={(logoped as any).lessonPrice} showPriceToParents={(logoped as any).showPriceToParents} address={(logoped as any).address} profession={(logoped as any).profession} experienceYears={(logoped as any).experienceYears} specialization={(logoped as any).specialization} about={(logoped as any).about} education={(logoped as any).education} hideAboutFromParents={(logoped as any).hideAboutFromParents} hideEducationFromParents={(logoped as any).hideEducationFromParents} instagram={(logoped as any).instagram} subscription={(logoped as any).subscription || (logoped as any).plan || (logoped as any).subscriptionPlan || null}>
+                    {logoped.image ? (
+                      <div className="w-12 h-12 rounded-full overflow-hidden bg-gray-100 flex-shrink-0">
+                        <Image src={logoped.image} alt={logoped.name || 'Логопед'} width={48} height={48} className="object-cover w-full h-full" />
+                      </div>
+                    ) : (
+                      <div className="w-12 h-12 rounded-full bg-gray-200 flex items-center justify-center text-xs text-muted flex-shrink-0">Нет фото</div>
+                    )}
+                  </LogopedPreviewTrigger>
+                  <div>
+                  <LogopedPreviewTrigger name={logoped.name || 'Без имени'} image={logoped.image} phone={(logoped as any).phone} isOnline={(logoped as any).isOnline} isOffline={(logoped as any).isOffline} lessonPrice={(logoped as any).lessonPrice} showPriceToParents={(logoped as any).showPriceToParents} address={(logoped as any).address} profession={(logoped as any).profession} experienceYears={(logoped as any).experienceYears} specialization={(logoped as any).specialization} about={(logoped as any).about} education={(logoped as any).education} hideAboutFromParents={(logoped as any).hideAboutFromParents} hideEducationFromParents={(logoped as any).hideEducationFromParents} instagram={(logoped as any).instagram} subscription={(logoped as any).subscription || (logoped as any).plan || (logoped as any).subscriptionPlan || null}>
+                    <div className="text-lg font-semibold cursor-pointer flex items-center gap-2 flex-wrap">
+                      {logoped.name || 'Без имени'}
+                      {((logoped as any).featuredSuper || (logoped as any).featured) && (
+                        <VipBadge level={(logoped as any).featuredSuper ? 'VIP+' : 'VIP'} />
+                      )}
+                    </div>
+                  </LogopedPreviewTrigger>
+                  <div className="text-sm text-muted">
+                    {(logoped.branch?.company?.name && logoped.branch?.name)
+                      ? `${logoped.branch.company.name} — ${logoped.branch.name}`
+                      : (logoped.branch?.name || 'Без филиала')}
+                  </div>
+                  {/* Публичная инфо с учётом флагов показа */}
+                  {logoped.specialization && (
+                    <div className="inline-flex items-center gap-2 mt-2">
+                      <span className="badge">Специализация</span>
+                      <span className="text-sm text-gray-800">{logoped.specialization}</span>
+                    </div>
+                  )}
+                  {logoped.showPriceToParents && typeof logoped.lessonPrice === 'number' && (
+                    <div className="text-sm mt-1">Цена занятия: <span className="font-medium">{logoped.lessonPrice} ₽</span></div>
+                  )}
+                  {!logoped.hideAboutFromParents && logoped.about && (
+                    <div className="text-sm mt-2 whitespace-pre-line"><span className="font-medium">О себе:</span> {logoped.about}</div>
+                  )}
+                  {!logoped.hideEducationFromParents && logoped.education && (
+                    <div className="text-sm mt-2 whitespace-pre-line"><span className="font-medium">Образование:</span> {logoped.education}</div>
+                  )}
+                  {/* Доп. сведения, не закрытые флагами */}
+                  {typeof logoped.experienceYears === 'number' && (
+                    <div className="text-sm mt-1">Стаж: <span className="font-medium">{logoped.experienceYears}</span> лет</div>
+                  )}
+                  {logoped.profession && (
+                    <div className="text-sm mt-1">Профессия: <span className="font-medium">{logoped.profession}</span></div>
+                  )}
+                  {(logoped as any).city && (
+                    <div className="text-sm mt-1">Город: {(logoped as any).city}</div>
+                  )}
+                  {(logoped as any).address && (
+                    <div className="text-sm mt-1">Адрес: {(logoped as any).address}</div>
+                  )}
+                  {(logoped as any).isOnline || (logoped as any).isOffline ? (
+                    <div className="text-sm mt-1">
+                      Формат занятий: {[ (logoped as any).isOnline ? 'онлайн' : null, (logoped as any).isOffline ? 'офлайн' : null ].filter(Boolean).join(' / ')}
+                    </div>
+                  ) : null}
+                  </div>
+                </div>
+              </div>
+
+              {/* Дети родителя, закреплённые за этим логопедом */}
+              <div className="mt-4">
+                <div className="font-medium mb-2">Ваши дети у этого логопеда</div>
+                <div className="grid gap-2">
+                  {kids.map((k) => (
+                    <div key={k.id} className="flex items-center justify-between gap-3 rounded-md px-3 py-2 bg-gray-50">
+                      <div className="flex items-center gap-3">
+                        {k.photoUrl ? (
+                          <div className="w-10 h-10 rounded-full overflow-hidden bg-gray-100">
+                            <Image src={k.photoUrl} alt={k.firstName} width={40} height={40} className="object-cover w-full h-full" />
+                          </div>
+                        ) : (
+                          <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center text-xs text-muted">Нет фото</div>
+                        )}
+                        <div className="text-sm">
+                          <div className="font-medium">{k.lastName} {k.firstName}</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Link href={`/chat/${convByKidId[k.id] || ''}`} className="btn btn-sm">Написать</Link>
+                        <form action={detachChildFromLogoped}>
+                          <input type="hidden" name="childId" value={k.id} />
+                          <button className="btn btn-outline btn-sm">Открепить от ребёнка</button>
+                        </form>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Дети без логопеда: выбор логопеда или заявка по email */}
+      {noLogopedKids.length > 0 && (
+        <div className="space-y-3">
+          <h2 className="text-lg font-semibold">Закрепить логопеда</h2>
+          {noLogopedKids.map((k) => (
+            <div key={k.id} className="rounded-lg shadow-sm p-4" style={{ background: 'var(--card-bg)' }}>
+              <div className="flex items-center gap-3 mb-3">
+                {k.photoUrl ? (
+                  <div className="w-10 h-10 rounded-full overflow-hidden bg-gray-100">
+                    <Image src={k.photoUrl} alt={k.firstName} width={40} height={40} className="object-cover w-full h-full" />
+                  </div>
+                ) : (
+                  <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center text-xs text-muted">Нет фото</div>
+                )}
+                <div className="text-sm font-medium">{k.lastName} {k.firstName}</div>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <form action={assignChildToLogoped} className="grid gap-2">
+                  <input type="hidden" name="childId" value={k.id} />
+                  <label className="grid gap-1">
+                    <span className="text-sm text-muted">Выбрать логопеда (в организации)</span>
+                    <select name="logopedId" className="input">
+                      <option value="">— Выберите —</option>
+                      {allLogopeds.map((l) => (
+                        <option key={l.id} value={l.id}>
+                          {l.name || 'Без имени'}{l.branch?.company?.name ? ` — ${l.branch.company.name}` : ''}{l.branch?.name ? ` / ${l.branch.name}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <div>
+                    <button className="btn btn-primary btn-sm">Закрепить</button>
+                  </div>
+                </form>
+                <form action={requestTransferByEmail} className="grid gap-2">
+                  <input type="hidden" name="childId" value={k.id} />
+                  <label className="grid gap-1">
+                    <span className="text-sm text-muted">Пригласить по email</span>
+                    <input name="email" type="email" className="input" placeholder="email логопеда" />
+                  </label>
+                  <label className="grid gap-1">
+                    <span className="text-sm text-muted">Комментарий (необязательно)</span>
+                    <input name="note" className="input" placeholder="сообщение логопеду" />
+                  </label>
+                  <div>
+                    <button className="btn btn-secondary btn-sm">Отправить приглашение</button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {groups.length === 0 && noLogopedKids.length === 0 && (
+        <div className="rounded-lg shadow-sm p-6 text-sm text-muted" style={{ background: 'var(--card-bg)' }}>У вас нет детей или все дети архивированы.</div>
+      )}
+    </div>
+  )
+}

@@ -1,0 +1,478 @@
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import Link from 'next/link'
+import ContactButtons from '@/components/ContactButtons.client'
+import VipBadge from '@/components/VipBadge'
+import { enrollChildToLesson, createBooking, cancelBooking, approveConsultationRequest, rejectConsultationRequest } from './schedule/actions'
+import { getUserPlan, getBetaRemainingDays, getPlanRemainingDays } from '@/lib/subscriptions'
+import { authOptions as _auth } from '@/lib/auth'
+
+export default async function LogopedDashboard({ searchParams }: { searchParams?: Promise<Record<string,string>> }) {
+  const sp = (searchParams ? await searchParams : {}) as Record<string,string>
+  const session = await getServerSession(authOptions)
+  const role = (session?.user as any)?.role
+  if (!session || !['LOGOPED','ADMIN','SUPER_ADMIN'].includes(role)) return <div>Доступ запрещён</div>
+
+  // Часовой пояс пользователя для корректной фильтрации "сегодня"
+  const userId = (session.user as any).id as string
+  const dbUser = await prisma.user.findUnique({ where: { id: userId } })
+  const tz = (dbUser as any)?.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow'
+  const now = new Date()
+  // Старт/конец суток в часовом поясе пользователя, затем конверсия в UTC Date
+  const toTZ = (d: Date, timeZone: string) => new Date(
+    new Date(d).toLocaleString('en-US', { timeZone })
+  )
+  const tzNow = toTZ(now, tz)
+  const startLocal = new Date(tzNow)
+  startLocal.setHours(0,0,0,0)
+  const endLocal = new Date(tzNow)
+  endLocal.setHours(23,59,59,999)
+  // Завтра (конец суток) для показа предстоящих занятий
+  const endLocalTomorrow = new Date(endLocal); endLocalTomorrow.setDate(endLocalTomorrow.getDate() + 1)
+  // Преобразуем локальные (в tz) границы к UTC-моментам
+  const start = new Date(startLocal.getTime() - (tzNow.getTime() - now.getTime()))
+  const end = new Date(endLocal.getTime() - (tzNow.getTime() - now.getTime()))
+
+  // Делаем выборку с небольшим запасом по времени (±12ч), а затем жёстко фильтруем по дате в TZ на уровне JS
+  const preFrom = new Date(start.getTime() - 12*60*60*1000)
+  const endTomorrowUtc = new Date(endLocalTomorrow.getTime() - (tzNow.getTime() - now.getTime()))
+  const preTo = new Date(endTomorrowUtc.getTime() + 12*60*60*1000)
+  const rawLessons = await (prisma as any).lesson.findMany({
+    where: { startsAt: { gte: preFrom, lte: preTo }, logopedId: userId },
+    orderBy: { startsAt: 'asc' },
+    include: { 
+      enrolls: { include: { child: { include: { parent: { include: { user: true } } } } } },
+      bookings: true,
+      consultationRequests: true,
+    },
+  }) as any[]
+
+  // Активные абонементы детей для текущего логопеда (одним запросом)
+  const childIdsSet = new Set<string>()
+  for (const l of rawLessons) {
+    const enr = (l.enrolls || [])[0]
+    const ch = enr?.child
+    if (ch?.id) childIdsSet.add(String(ch.id))
+  }
+  const childIds = Array.from(childIdsSet.values())
+  const passesRaw = childIds.length ? await (prisma as any).pass.findMany({
+    where: { status: 'ACTIVE', logopedId: userId, childId: { in: childIds } },
+    select: { childId: true, remainingLessons: true, totalLessons: true },
+  }) : []
+  const passByChild: Record<string, { remaining: number; total: number }> = {}
+  for (const p of passesRaw as any[]) {
+    const cid = String((p as any).childId)
+    const remaining = Number((p as any).remainingLessons || 0)
+    const total = Number((p as any).totalLessons || 0)
+    passByChild[cid] = { remaining, total }
+  }
+
+  // Автоочистка просроченных PENDING-заявок консультаций (для текущего логопеда)
+  try {
+    const expired = await (prisma as any).consultationRequest.findMany({
+      where: { subordinateId: userId, status: 'PENDING', lesson: { endsAt: { lt: now } } },
+      select: { id: true },
+      take: 100,
+    })
+    if (expired.length > 0) {
+      for (const r of expired) {
+        await (prisma as any).consultationRequest.update({ where: { id: r.id }, data: { status: 'REJECTED', respondedAt: new Date() } })
+      }
+    }
+  } catch {}
+
+  // Оценки по выбранным урокам (для фильтрации и подсчёта напоминаний)
+  const allLessonIds = rawLessons.map(l => l.id)
+  const allEvals = allLessonIds.length ? await (prisma as any).lessonEvaluation.findMany({ where: { lessonId: { in: allLessonIds } } }) : []
+  const evalByLesson: Record<string, 'DONE' | 'CANCELLED' | 'DRAFT' | 'PENDING' | undefined> = {}
+  for (const ev of allEvals) {
+    // Считаем урок оценённым, если есть DONE или CANCELLED
+    const st = (ev as any).status as string | undefined
+    if (!st) continue
+    if (st === 'DONE' || st === 'CANCELLED') evalByLesson[(ev as any).lessonId] = st as any
+  }
+
+  const fmt = new Intl.DateTimeFormat('ru-RU', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' })
+  const todayKey = fmt.format(tzNow)
+  const tomorrowKey = fmt.format(new Date(endLocalTomorrow))
+  const todaysLessons = rawLessons.filter((l: any) => {
+    const k1 = fmt.format(new Date(l.startsAt))
+    const k2 = fmt.format(new Date(l.endsAt ?? l.startsAt))
+    return k1 === todayKey && k2 === todayKey
+  })
+  const tomorrowsLessons = rawLessons.filter((l: any) => {
+    const k1 = fmt.format(new Date(l.startsAt))
+    const k2 = fmt.format(new Date(l.endsAt ?? l.startsAt))
+    return k1 === tomorrowKey && k2 === tomorrowKey
+  })
+
+  // Показываем все занятия за день (без фильтрации по WorkTemplate)
+  const todaysLessonsInWorkTime = todaysLessons
+  const tomorrowsLessonsInWorkTime = tomorrowsLessons
+  const lessonsForDisplay = [...todaysLessonsInWorkTime, ...tomorrowsLessonsInWorkTime]
+
+  // Переключатель дня и список для рендера
+  const daySel = (sp.day === 'tomorrow' ? 'tomorrow' : 'today') as 'today'|'tomorrow'
+  const list = daySel === 'today' ? todaysLessonsInWorkTime : tomorrowsLessonsInWorkTime
+  // Индекс границы «прошло / предстоит» для сегодня: первый слот, у которого endsAt > now
+  const cutIndex = daySel==='today' ? list.findIndex((l:any) => new Date(l.endsAt ?? l.startsAt) > now) : -1
+  const makeHref = (day: 'today'|'tomorrow') => {
+    const p = new URLSearchParams(sp)
+    p.set('day', day)
+    return `?${p.toString()}`
+  }
+  // Счётчики: только запланированные (есть записанный ребёнок) и не прошедшие
+  const todayPlannedCount = Array.isArray(todaysLessonsInWorkTime)
+    ? todaysLessonsInWorkTime.filter((l:any) => {
+        const hasChild = Boolean(((l.enrolls || [])[0]?.child))
+        const notFinished = new Date(l.endsAt ?? l.startsAt) > now
+        return hasChild && notFinished
+      }).length
+    : 0
+  const tomorrowPlannedCount = Array.isArray(tomorrowsLessonsInWorkTime)
+    ? tomorrowsLessonsInWorkTime.filter((l:any) => Boolean(((l.enrolls || [])[0]?.child))).length
+    : 0
+
+  // dayItems будет вычислен позже, когда будут доступны children
+  let dayItems: any[] = []
+
+  // Напоминание о неоценённых прошедших занятиях (за последние 14 дней)
+  const pastFrom = new Date(now.getTime() - 14*24*60*60*1000)
+  const pastLessonsAll = await (prisma as any).lesson.findMany({
+    where: {
+      logopedId: userId,
+      // учитываем только завершившиеся занятия
+      endsAt: { gte: pastFrom, lt: now },
+    },
+    select: { id: true },
+    take: 500,
+  })
+  const pastIds = pastLessonsAll.map((l:any)=> l.id)
+  const pastEvals = pastIds.length ? await (prisma as any).lessonEvaluation.findMany({ where: { lessonId: { in: pastIds } }, select: { lessonId: true, status: true } }) : []
+  const evaluatedPast = new Set<string>()
+  for (const ev of pastEvals) {
+    const st = (ev as any).status
+    if (st === 'DONE' || st === 'CANCELLED') evaluatedPast.add((ev as any).lessonId)
+  }
+  const pastUnevaluatedCount = pastIds.filter((id:string) => !evaluatedPast.has(id)).length
+
+  // дети текущего логопеда для записи в свободный слот
+  const children = await (prisma as any).child.findMany({ where: { logopedId: userId, isArchived: false }, orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }] })
+  // Счетчики для панели задач
+  const countConsultIn = await (prisma as any).consultationRequest.count({ where: { subordinateId: userId, status: 'PENDING' } })
+  const countConsultOut = await (prisma as any).consultationRequest.count({ where: { supervisorId: userId, status: 'PENDING' } })
+  const countParentActiv = await (prisma as any).activationRequest.count({ where: { targetLogopedId: userId, status: 'PENDING' } })
+
+  const name = (session.user as any)?.name || (session.user as any)?.email
+  const vipLevel: 'VIP' | 'VIP+' | undefined = ((dbUser as any)?.featuredSuper ? 'VIP+' : ((dbUser as any)?.featured ? 'VIP' : undefined))
+  const userEmail = (session.user as any)?.email as string
+  // Новая логика тарифа: бета 15 дней, далее Free
+  const plan = await getUserPlan(userId)
+  const betaLeftDays = plan === 'beta' ? await getBetaRemainingDays(userId) : 0
+  const planDaysLeft = await getPlanRemainingDays(userId)
+  // Телефон WhatsApp бухгалтера
+  let waPhone = '+79889543377'
+  try {
+    const last = await prisma.auditLog.findFirst({ where: { action: 'BILLING_WHATSAPP_PHONE' }, orderBy: { createdAt: 'desc' } })
+    const p = (last as any)?.payload as string | undefined
+    if (p && p.trim()) waPhone = p.trim()
+  } catch {}
+  const waDigits = waPhone.replace(/[^+0-9]/g,'')
+
+  async function notifyPlanRequest(formData: FormData) {
+    'use server'
+    const session = await getServerSession(_auth)
+    if (!session?.user) return
+    const uid = (session.user as any).id as string
+    const from = String(formData.get('from') || plan)
+    const to = String(formData.get('to') || 'pro')
+    const period = String(formData.get('period') || 'manual')
+    try { await prisma.auditLog.create({ data: { action: 'PLAN_CHANGE_REQUEST', payload: JSON.stringify({ userId: uid, from, to, period, source: 'dashboard' }), actorId: uid } }) } catch {}
+  }
+
+  // Теперь можно собрать dayItems, используя children
+  dayItems = list.map((l: any) => {
+    const t1 = new Date(l.startsAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', timeZone: tz })
+    const t2 = new Date(l.endsAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', timeZone: tz })
+    const enr = (l.enrolls || []) as any[]
+    const enrolled = enr[0]
+    const child = enrolled?.child
+    const parent = child?.parent
+    const parentName = parent?.fullName || parent?.user?.name || parent?.user?.email || '—'
+    const parentPhone = parent?.phone || '—'
+    const childName = child ? `${child.lastName} ${child.firstName}` : (l.bookings?.[0]?.holder ? `Бронь: ${l.bookings[0].holder}` : 'Свободно')
+    const hasActiveBooking = (l.bookings || []).some((b: any) => b.status === 'ACTIVE')
+    const pendingConsult = (l.consultationRequests || []).find((c: any) => c.status === 'PENDING')
+    const startsAt = new Date(l.startsAt)
+    const endsAt = new Date(l.endsAt)
+    const isPast = endsAt < now
+    const isEvaluated = Boolean(evalByLesson[l.id])
+    const showPendingConsult = Boolean(pendingConsult && !isPast && !enrolled && !hasActiveBooking && !isEvaluated)
+    // Подсветка: свободные — зелёная; не законченные — красная; требующие оценки — синяя (имеет приоритет)
+    const notFinished = endsAt > now
+    const isFree = !enrolled && !hasActiveBooking && !showPendingConsult
+    let highlightStyle: React.CSSProperties | undefined = undefined
+    if (isFree) {
+      highlightStyle = { background: '#ECFDF5', borderColor: '#A7F3D0' } // emerald-50 / emerald-300
+    } else if (notFinished) {
+      highlightStyle = { background: '#FEF2F2', borderColor: '#FECACA' } // red-50 / red-200
+    }
+    const needsEval = isPast && !isEvaluated && Boolean(enrolled?.child)
+    if (needsEval) {
+      highlightStyle = { background: '#EFF6FF', borderColor: '#BFDBFE' } // blue-50 / blue-200
+    }
+    return (
+      <div key={l.id} className={`p-3 rounded-md border shadow-sm ${showPendingConsult ? 'slot-pending-subordinate' : ''}`} style={{ background: 'var(--card-bg)', ...(highlightStyle||{}) }}>
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="font-semibold">
+              {t1} — {t2}
+              {showPendingConsult && (
+                <span className="ml-2 inline-flex items-center text-xs font-medium text-indigo-700"><span className="i-circle pulse mr-1"/> Запрос консультации</span>
+              )}
+            </div>
+            <div className="text-sm text-muted">Ребёнок: {childName}{(() => {
+              if (!child) return null
+              const info = passByChild[String(child.id)]
+              if (!info) return null
+              return (
+                <span className="ml-2 inline-flex items-center rounded px-1.5 py-[1px] text-[11px] font-medium bg-amber-100 text-amber-900 border border-amber-200">
+                  Аб.: {info.remaining}/{info.total}
+                </span>
+              )
+            })()}</div>
+            {child && (
+              <div className="text-xs text-muted flex flex-wrap items-center gap-2">Родитель: {parentName} · Телефон: {parentPhone}
+                {(() => {
+                  const raw = String(parentPhone || '')
+                  let digits = raw.replace(/\D/g, '')
+                  if (!digits) return null
+                  // Нормализация в международный формат (по умолчанию RU: 7)
+                  if (digits.length === 11 && digits.startsWith('8')) digits = '7' + digits.slice(1)
+                  if (digits.length === 10) digits = '7' + digits
+                  const telHref = `tel:+${digits}`
+                  // WhatsApp: natively open app, fallback to web
+                  const waApp = `whatsapp://send?phone=${digits}`
+                  const waWeb = `https://wa.me/${digits}`
+                  // Max: пробуем схему приложения, затем веб‑страницу чата (path-стиль надёжнее на iOS/Android)
+                  const maxApp = `max://chat?phone=${digits}`
+                  const maxWeb1 = `https://max.me/chat/${digits}`
+                  const maxWeb2 = `https://max.ru/chat/${digits}`
+                  return (
+                    <span className="inline-flex items-center gap-1 ml-2">
+                      <a href={telHref} className="btn btn-outline btn-sm" title="Позвонить">
+                        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.86 19.86 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.86 19.86 0 0 1 2.08 4.18 2 2 0 0 1 4.06 2h3a2 2 0 0 1 2 1.72 12.66 12.66 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.66 12.66 0 0 0 2.81.7A2 2 0 0 1 22 16.92Z"/></svg>
+                      </a>
+                      <a href={waWeb} className="btn btn-outline btn-sm" title="WhatsApp">
+                        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.472-.149-.67.15-.198.297-.767.966-.94 1.165-.173.198-.347.223-.644.074-.297-.148-1.255-.462-2.39-1.475-.883-.788-1.48-1.761-1.654-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.373-.025-.522-.075-.149-.669-1.613-.916-2.206-.242-.58-.487-.5-.669-.51l-.57-.01c-.198 0-.521 .074-.793 .372-.272 .298-1.041 1.016-1.041 2.479 0 1.462 1.066 2.875 1.213 3.074 .149 .198 2.1 3.2 5.083 4.487 .71 .306 1.263 .489 1.694 .626 .712 .227 1.36 .195 1.872 .118 .571 -.085 1.758 -.718 2.006 -1.41 .248 -.69 .248 -1.282 .173 -1.41 -.074 -.124 -.272 -.198 -.57 -.347з"/><path d="M20.52 3.48A11.94 11.94 0 0 0 12 0C5.373 0 0 5.373 0 12c0 2.114 .553 4.096 1.52 5.82L0 24l6.38 -1.48A11.94 11.94 0 0 0 12 24c6.627 0 12 -5.373 12 -12 0 -3.19 -1.242 -6.096 -3.48 -8.52zM12 22a9.93 9.93 0 0 1 -5.062 -1.387l-.363 -.215 -3.778 .88 .805 -3.687 -.23 -.378A9.94 9.94 0 1 1 12 22z"/></svg>
+                      </a>
+                      <a href={maxWeb1} className="btn btn-outline btn-sm" title="Max">
+                        {/* Иконка Max (кружок с буквой M) */}
+                        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                          <circle cx="12" cy="12" r="10" fill="#5B21B6"/>
+                          <path d="M7 16V8h2.2l2.3 3.9L13.8 8H16v8h-2v-4.1l-1.5 2.6h-1L10 11.9V16H8z" fill="#fff"/>
+                        </svg>
+                      </a>
+                    </span>
+                  )
+                })()}
+              </div>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {child && (
+              <>
+                <Link href={`/logoped/child/${child.id}`} className="btn btn-link btn-sm">Карточка</Link>
+                {isPast && !isEvaluated ? (
+                  <Link href={`/logoped/lesson/${l.id}`} className="btn btn-primary btn-sm">Оценить</Link>
+                ) : null}
+                {isPast && isEvaluated ? (
+                  <span className="badge badge-green">Оценено</span>
+                ) : null}
+              </>
+            )}
+            {!child && hasActiveBooking && (
+              <>
+                <Link href={`/logoped/lesson/${l.id}`} className="btn btn-outline btn-sm">Слот</Link>
+                {(() => {
+                  const b = (l.bookings || []).find((x: any) => x.status === 'ACTIVE')
+                  return b ? (
+                    <form action={cancelBooking}>
+                      <input type="hidden" name="bookingId" value={b.id} />
+                      <button className="btn btn-danger btn-sm">Отменить бронь</button>
+                    </form>
+                  ) : null
+                })()}
+              </>
+            )}
+            {!child && !hasActiveBooking && showPendingConsult && (
+              <>
+                <form action={approveConsultationRequest}>
+                  <input type="hidden" name="requestId" value={pendingConsult.id} />
+                  <button className="btn btn-secondary btn-sm">Принять</button>
+                </form>
+                <form action={rejectConsultationRequest}>
+                  <input type="hidden" name="requestId" value={pendingConsult.id} />
+                  <button className="btn btn-danger btn-sm">Отклонить</button>
+                </form>
+              </>
+            )}
+            {!child && !hasActiveBooking && !pendingConsult && (
+              <>
+                <form action={enrollChildToLesson} className="flex items-center gap-2">
+                  <input type="hidden" name="lessonId" value={l.id} />
+                  <select name="childId" className="input">
+                    {children.map((c: any) => (
+                      <option value={c.id} key={c.id}>{c.lastName} {c.firstName}</option>
+                    ))}
+                  </select>
+                  <button className="btn btn-secondary btn-sm">Записать</button>
+                </form>
+                <form action={createBooking} className="flex items-center gap-2">
+                  <input type="hidden" name="lessonId" value={l.id} />
+                  <input className="input" name="holder" placeholder="Имя для брони" />
+                  <button className="btn btn-outline btn-sm">Бронь</button>
+                </form>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    )
+  })
+
+  // Уведомления о передачах детей
+  const lastSeen = (dbUser as any)?.lastNotificationsSeenAt ? new Date((dbUser as any).lastNotificationsSeenAt as any) : new Date(0)
+  const transferApprovedSince = await (async () => {
+    try {
+      return await (prisma as any).transferRequest.count({ where: { toLogopedId: userId, status: 'APPROVED', createdAt: { gt: lastSeen } } })
+    } catch { return 0 }
+  })()
+  const transferPendingCount = await (async () => {
+    try {
+      return await (prisma as any).transferRequest.count({ where: { toLogopedId: userId, status: 'PENDING' } })
+    } catch { return 0 }
+  })()
+
+  return (
+    <div className="container space-y-6 py-6">
+      <div className="flex items-center justify-between">
+        <h1 className="text-lg font-semibold inline-flex items-center gap-2">
+          {name}
+          {vipLevel ? <VipBadge level={vipLevel} /> : null}
+        </h1>
+      </div>
+      {/* Баннер о принятых передачах с последнего просмотра уведомлений */}
+      {transferApprovedSince > 0 && (
+        <a href="/logoped/notifications" className="rounded border p-3 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 transition flex items-center justify-between">
+          <div>Вам переданы новые дети: {transferApprovedSince}. Проверьте уведомления.</div>
+          <div className="btn btn-secondary btn-sm">Перейти</div>
+        </a>
+      )}
+      {/* Напоминание про неоценённые прошедшие занятия */}
+      {pastUnevaluatedCount > 0 && (
+        <a href="/logoped/schedule" className="rounded border p-3 bg-amber-50 text-amber-900 hover:bg-amber-100 transition flex items-center justify-between">
+          <div>
+            У вас {pastUnevaluatedCount} неоценённых прошедших занятий (за 14 дней, включая сегодня). Пожалуйста, оцените их в расписании.
+          </div>
+          <div className="btn btn-secondary btn-sm">Перейти в расписание</div>
+        </a>
+      )}
+
+      <div className="text-sm text-muted">Сегодня: {tzNow.toLocaleDateString('ru-RU', { timeZone: tz })}</div>
+
+      {/* Виджет подписки: План и остаток дней */}
+      <div className="rounded border p-3 text-sm flex items-center justify-between flex-wrap gap-2" style={{ background: 'var(--card-bg)' }}>
+        <div>
+          План: <b>{plan === 'pro_plus' ? 'PRO+' : plan.toUpperCase()}</b>
+          {planDaysLeft > 0 && <span className="text-muted"> · осталось {planDaysLeft} дн.</span>}
+          {plan === 'beta' && betaLeftDays > 0 && <span className="text-muted"> · бета {betaLeftDays}/15</span>}
+        </div>
+        <a className="btn btn-sm" href="/settings/billing">Подписка</a>
+      </div>
+
+      {/* Баннер: окончание подписки в ближайшие 5 дней (кроме free) */}
+      {(plan !== 'free' && planDaysLeft > 0 && planDaysLeft <= 5) && (
+        <div className="rounded border p-3 bg-amber-50 text-amber-900 flex items-center justify-between gap-2">
+          <div>
+            Срок действия вашей подписки заканчивается через <b>{planDaysLeft} дн.</b> Пожалуйста, продлите, чтобы сохранить доступ к функциям.
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <a href="/settings/billing" className="btn btn-secondary btn-sm">Подписка</a>
+            <a href={`https://wa.me/${encodeURIComponent(waDigits)}?text=${encodeURIComponent('Здравствуйте! Хочу продлить подписку. Мой email: ' + (userEmail || ''))}`} target="_blank" className="btn btn-outline btn-sm">WhatsApp</a>
+            <form action={notifyPlanRequest}>
+              <input type="hidden" name="from" value={plan} />
+              <input type="hidden" name="to" value={plan} />
+              <input type="hidden" name="period" value="renew" />
+              <button className="btn btn-link btn-xs">Сообщить админам</button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Панель задач скрыта по требованию: Входящие/Исходящие консультации, Заявки активации родителей, Передача детей */}
+
+      {plan === 'beta' && betaLeftDays > 0 && false && (
+        <div className="rounded border p-3 bg-indigo-50 text-indigo-900">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              Бета‑подписка активна. Осталось {betaLeftDays} из 15 дней. Далее аккаунт перейдёт на Free (филиалы 0, логопедов 1, чат — нет).
+            </div>
+            <a
+              href={`https://wa.me/89889543377?text=${encodeURIComponent('Здравствуйте! Хочу оформить подписку. Мой email: ' + (userEmail||''))}`}
+              target="_blank"
+              className="btn btn-primary btn-sm"
+            >Оформить подписку</a>
+          </div>
+        </div>
+      )}
+
+      {plan === 'free' ? (
+        <div className="rounded border p-3 bg-gray-50">
+          <div className="text-sm">
+            У вас план <b>FREE</b>. В этом плане на главной скрыт список занятий «Сегодня/Завтра», чат недоступен, создание организаций/филиалов ограничено. 
+            Для полного доступа перейдите в раздел подписки и выберите платный план.
+          </div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <a href="/settings/billing" className="btn btn-secondary btn-sm">Выбрать план</a>
+            <a href={`https://wa.me/${encodeURIComponent(waDigits)}?text=${encodeURIComponent('Здравствуйте! У меня тариф FREE, хочу оформить платный план. Мой email: ' + (userEmail || ''))}`} target="_blank" className="btn btn-outline btn-sm">WhatsApp</a>
+          </div>
+        </div>
+      ) : (
+        <section className="section">
+          {/* Переключатели Сегодня/Завтра */}
+          <div className="mb-3 inline-flex items-center gap-2">
+            <a href={makeHref('today')} className={`btn btn-xs ${daySel==='today'?'btn-secondary':'btn-outline'}`}>
+              Сегодня
+              {todayPlannedCount > 0 && (
+                <span className="ml-2 inline-flex items-center justify-center rounded-full bg-red-600 text-white text-[10px] font-bold" style={{ minWidth: 16, height: 16, padding: '0 5px', lineHeight: '16px' }}>{todayPlannedCount}</span>
+              )}
+            </a>
+            <a href={makeHref('tomorrow')} className={`btn btn-xs ${daySel==='tomorrow'?'btn-secondary':'btn-outline'}`}>
+              Завтра
+              {tomorrowPlannedCount > 0 && (
+                <span className="ml-2 inline-flex items-center justify-center rounded-full bg-red-600 text-white text-[10px] font-bold" style={{ minWidth: 16, height: 16, padding: '0 5px', lineHeight: '16px' }}>{tomorrowPlannedCount}</span>
+              )}
+            </a>
+          </div>
+          <div className="space-y-2">
+            {list.length === 0 ? (
+              <div className="text-sm text-muted">Занятий нет</div>
+            ) : (
+              cutIndex>0 ? (
+                <>
+                  {dayItems.slice(0, cutIndex)}
+                  <div className="h-0.5 bg-red-500 my-2 opacity-70" />
+                  {dayItems.slice(cutIndex)}
+                </>
+              ) : (
+                dayItems
+              )
+            )}
+          </div>
+        </section>
+      )}
+    </div>
+  )
+}

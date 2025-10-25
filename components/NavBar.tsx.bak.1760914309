@@ -1,0 +1,342 @@
+"use client"
+import Link from 'next/link'
+import { useSession, signOut } from 'next-auth/react'
+import { useEffect, useRef, useState } from 'react'
+import Icon from './Icon'
+import dynamic from 'next/dynamic'
+import { updateTheme } from '@/app/settings/profile/actions'
+const MobileUserBadge = dynamic(() => import('@/components/mobile/MobileUserBadge'), { ssr: false })
+
+export default function NavBar() {
+  const { data, status } = useSession()
+  const role = (data?.user as any)?.role as string | undefined
+  const email = (data?.user as any)?.email as string | undefined
+  const nameRaw = (data?.user as any)?.name as string | undefined
+  const cityRaw = (((data?.user as any)?.city as string | undefined)?.trim()) || 'Краснодар'
+  const activatedForever = Boolean((data?.user as any)?.activatedForever)
+  const activatedUntilRaw = (data?.user as any)?.activatedUntil as any
+  const betaExpiresAtRaw = (data?.user as any)?.betaExpiresAt as any
+  const activatedUntil = activatedUntilRaw ? new Date(activatedUntilRaw) : null
+  const betaExpiresAt = betaExpiresAtRaw ? new Date(betaExpiresAtRaw) : null
+  const now = new Date()
+  const activeByPaid = activatedForever || (activatedUntil && activatedUntil > now)
+  const betaLeftDays = !activeByPaid && betaExpiresAt ? Math.ceil((betaExpiresAt.getTime() - now.getTime()) / (1000*60*60*24)) : 0
+  const paidLeftDays = !activatedForever && activatedUntil && activatedUntil > now ? Math.ceil((activatedUntil.getTime() - now.getTime()) / (1000*60*60*24)) : 0
+  const warnDays = role === 'LOGOPED' && !activatedForever && ((paidLeftDays>0 && paidLeftDays<=14) || (betaLeftDays>0 && betaLeftDays<=14))
+  const badgeConsultIn = Number((data?.user as any)?.badgeConsultIn || 0)
+  const badgeConsultOut = Number((data?.user as any)?.badgeConsultOut || 0)
+  const badgeParentActivations = Number((data?.user as any)?.badgeParentActivations || 0)
+
+  const [counts, setCounts] = useState({ in: badgeConsultIn, out: badgeConsultOut, act: badgeParentActivations, unread: 0 })
+  const prevRef = useRef(counts)
+  const [toasts, setToasts] = useState<{ id: number; text: string }[]>([])
+  useEffect(() => { prevRef.current = counts }, [counts])
+  useEffect(() => {
+    let timer: any
+    let started = false
+    async function poll() {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+        // не опрашиваем, если вкладка не активна
+        timer = setTimeout(poll, 30000)
+        return
+      }
+      try {
+        const r = await fetch('/api/badges', { cache: 'no-store' })
+        if (r.ok) {
+          const j = await r.json()
+          const next = { in: Number(j.consultIn||0), out: Number(j.consultOut||0), act: Number(j.parentActivations||0), unread: Number(j.unread||0) }
+          const prev = prevRef.current
+          if (started) {
+            if (next.in > prev.in) addToast(`+${next.in - prev.in} входящих консультаций`)
+            if (next.out > prev.out) addToast(`+${next.out - prev.out} исходящих консультаций`)
+            if (next.act > prev.act) addToast(`+${next.act - prev.act} заявок активации родителей`)
+          }
+          setCounts(next)
+          started = true
+        }
+      } catch {}
+      timer = setTimeout(poll, 30000)
+    }
+    // первый запуск через 1.5с, чтобы не мешать первому рендеру
+    timer = setTimeout(poll, 1500)
+    function onVis() { if (document.visibilityState === 'visible') { clearTimeout(timer); timer = setTimeout(poll, 500) } }
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVis)
+    return () => { if (timer) clearTimeout(timer); if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVis) }
+  }, [])
+  function addToast(text: string) {
+    const id = Date.now() + Math.random()
+    setToasts(t => [...t, { id, text }])
+    setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 4000)
+  }
+
+  // Global toast bus: window.dispatchEvent(new CustomEvent('app:toast', { detail: 'message' }))
+  useEffect(() => {
+    function onToast(e: Event) {
+      const ce = e as CustomEvent<string>
+      const text = (ce?.detail as any) || ''
+      if (text) addToast(String(text))
+    }
+    if (typeof window !== 'undefined') {
+      window.addEventListener('app:toast', onToast as any)
+    }
+    return () => {
+      if (typeof window !== 'undefined') window.removeEventListener('app:toast', onToast as any)
+    }
+  }, [])
+
+function ThemeQuickToggleMobile({ initialTheme }: { initialTheme?: string }) {
+  const [mounted, setMounted] = useState(false)
+  const [ready, setReady] = useState(false)
+  const [theme, setTheme] = useState<string>('default')
+  const formRef = useRef<HTMLFormElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => { setMounted(true) }, [])
+  useEffect(() => {
+    if (!ready) return
+    try {
+      document.documentElement.setAttribute('data-theme', theme)
+      localStorage.setItem('theme', theme)
+    } catch {}
+  }, [theme, ready])
+  useEffect(() => {
+    // Инициализация темы после монтирования, чтобы совпасть с ранним скриптом в layout
+    try {
+      const t = document.documentElement.getAttribute('data-theme') || localStorage.getItem('theme') || initialTheme || 'default'
+      setTheme(t)
+      if (inputRef.current) inputRef.current.value = t
+      setReady(true)
+    } catch {}
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  function toggle() {
+    const next = theme === 'dark' ? 'default' : 'dark'
+    setTheme(next)
+    if (inputRef.current) inputRef.current.value = next
+    formRef.current?.requestSubmit()
+  }
+  return (
+    <form ref={formRef} action={updateTheme}>
+      <input ref={inputRef} type="hidden" name="theme" defaultValue={theme} />
+      <input type="hidden" name="quick" value="1" />
+      <input type="hidden" name="source" value="navbar" />
+      <button type="button" onClick={toggle} className="btn btn-outline btn-sm" title="Тема">
+        <span suppressHydrationWarning>
+          {mounted ? (theme === 'dark' ? <SunIcon /> : <MoonIcon />) : <span className="inline-block w-4 h-4" />}
+        </span>
+      </button>
+    </form>
+  )
+}
+
+function SunIcon(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" width="18" height="18" aria-hidden="true" {...props}>
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+    </svg>
+  )
+}
+
+function MoonIcon(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" width="18" height="18" aria-hidden="true" {...props}>
+      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+    </svg>
+  )
+}
+
+function ThemeQuickToggle({ initialTheme }: { initialTheme?: string }) {
+  const [mounted, setMounted] = useState(false)
+  const [ready, setReady] = useState(false)
+  const [theme, setTheme] = useState<string>('default')
+  const formRef = useRef<HTMLFormElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => { setMounted(true) }, [])
+  useEffect(() => {
+    if (!ready) return
+    try {
+      document.documentElement.setAttribute('data-theme', theme)
+      localStorage.setItem('theme', theme)
+    } catch {}
+  }, [theme, ready])
+  useEffect(() => {
+    try {
+      const t = document.documentElement.getAttribute('data-theme') || localStorage.getItem('theme') || initialTheme || 'default'
+      setTheme(t)
+      if (inputRef.current) inputRef.current.value = t
+      setReady(true)
+    } catch {}
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  function toggle() {
+    const next = theme === 'dark' ? 'default' : 'dark'
+    setTheme(next)
+    if (inputRef.current) inputRef.current.value = next
+    formRef.current?.requestSubmit()
+  }
+  return (
+    <form ref={formRef} action={updateTheme} className="hidden md:inline-block">
+      <input ref={inputRef} type="hidden" name="theme" defaultValue={theme} />
+      <input type="hidden" name="quick" value="1" />
+      <input type="hidden" name="source" value="navbar" />
+      <button type="button" onClick={toggle} className="btn btn-outline btn-sm" title="Быстрый переключатель темы">
+        <span suppressHydrationWarning>
+          {mounted ? (theme === 'dark' ? <SunIcon /> : <MoonIcon />) : <span className="inline-block w-4 h-4" />}
+        </span>
+      </button>
+    </form>
+  )
+}
+
+function ThemeQuickSwitcher({ initialTheme }: { initialTheme?: string }) {
+  const [mounted, setMounted] = useState(false)
+  const [ready, setReady] = useState(false)
+  const [theme, setTheme] = useState<string>('default')
+  const formRef = useRef<HTMLFormElement>(null)
+  useEffect(() => { setMounted(true) }, [])
+  useEffect(() => {
+    if (!ready) return
+    try {
+      document.documentElement.setAttribute('data-theme', theme)
+      localStorage.setItem('theme', theme)
+    } catch {}
+  }, [theme, ready])
+  useEffect(() => {
+    try {
+      const t = document.documentElement.getAttribute('data-theme') || localStorage.getItem('theme') || initialTheme || 'default'
+      setTheme(t)
+      setReady(true)
+    } catch {}
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  return (
+    <form ref={formRef} action={updateTheme} className="hidden md:inline-block">
+      <input type="hidden" name="quick" value="1" />
+      <input type="hidden" name="source" value="navbar" />
+      <select
+        name="theme"
+        className="input !py-1 !px-2 text-xs min-w-[150px]"
+        value={theme}
+        onChange={(e) => { setTheme(e.target.value); formRef.current?.requestSubmit(); }}
+        title="Тема интерфейса"
+      >
+        <option value="default">Стандартная</option>
+        <option value="kids">Детский</option>
+        <option value="strict">Строгий</option>
+        <option value="cartoon">Мультяшный</option>
+        <option value="female">Девушка</option>
+        <option value="male">Мужчина</option>
+        <option value="loft">Лофт</option>
+        <option value="flashy">Вызывающий</option>
+        <option value="dark">Тёмный</option>
+        <option value="ios">Под iPhone</option>
+        <option value="retro">Ретро</option>
+      </select>
+    </form>
+  )
+}
+
+  // мобильное полноэкранное меню больше не используем (есть нижняя таб-панель)
+
+  function toPrepositionalCity(city?: string) {
+    if (!city) return ''
+    const c = city.trim()
+    const lower = c.toLowerCase()
+    // часто встречающиеся: -а/-я -> -е; -й -> -е; -ь -> -и; -ия/-ие -> -ии; согласный -> +е; -и/-ы -> без изменений
+    if (lower.endsWith('ия')) return c.slice(0, -2) + 'ии'
+    if (lower.endsWith('ие')) return c.slice(0, -2) + 'ии'
+    if (lower.endsWith('а')) return c.slice(0, -1) + 'е'
+    if (lower.endsWith('я')) return c.slice(0, -1) + 'е'
+    if (lower.endsWith('й')) return c.slice(0, -1) + 'е'
+    if (lower.endsWith('ь')) return c.slice(0, -1) + 'и'
+    if (/[бвгджзйклмнпрстфхцчшщ]$/i.test(lower)) return c + 'е'
+    // Случаи типа Сочи/Пенза/Орёл частично покроются, Орёл -> добавит е по согласной не сработает, оставим как есть
+    return c
+  }
+  const cityPrep = toPrepositionalCity(cityRaw)
+  function formatSurnameInitials(name?: string | null, email?: string | null) {
+    const n = (name || '').trim()
+    if (!n) return email || ''
+    const parts = n.split(/\s+/).filter(Boolean)
+    if (parts.length === 1) return parts[0]
+    const surname = parts[0]
+    const initials = parts.slice(1).map(p => (p && p[0] ? (p[0].toUpperCase() + '.') : '')).join('')
+    return `${surname} ${initials}`.trim()
+  }
+  return (
+    <>
+    <header className="sticky top-0 z-10 border-b" style={{ background: 'var(--background)', color: 'var(--foreground)' }}>
+      <nav className="container flex items-center justify-between py-3">
+        <Link href="/" className="flex items-center gap-2 select-none" aria-label="My Logoped">
+          <img src="/logo.png" alt="logo" className="w-6 h-6 rounded" />
+          <span className="text-[16px] font-extrabold tracking-wide leading-none" style={{ color: 'var(--brand)' }}>
+            My Logoped{cityPrep ? ' в ' + cityPrep : ''}
+          </span>
+        </Link>
+        {/* Desktop actions (навигация на десктопе в левом сайдбаре). Скрываем до завершения загрузки сессии, чтобы не было мерцания. */}
+        <div className="hidden md:flex items-center gap-2 text-sm">
+          {status !== 'loading' && (
+            <>
+              {(role === 'LOGOPED' || role === 'ADMIN' || role === 'SUPER_ADMIN') && (
+                <Link href="/logoped/notifications" className={`btn relative ${((counts.in+counts.act)>0)?'btn-primary':''}`} title="Уведомления">
+                  <Icon name="bell" />
+                  {(counts.in+counts.act)>0 && (
+                    <span className="absolute -top-1 -right-2 rounded-full bg-red-500 text-white text-[10px] px-1.5">{counts.in+counts.act}</span>
+                  )}
+                </Link>
+              )}
+              {/* Быстрый переключатель темы */}
+              <ThemeQuickSwitcher initialTheme={(data?.user as any)?.theme as string | undefined} />
+              <ThemeQuickToggle initialTheme={(data?.user as any)?.theme as string | undefined} />
+              {data ? (
+                <>
+                  <span className="text-muted truncate max-w-[200px]" title={nameRaw || email}>
+                    {formatSurnameInitials(nameRaw, email)}
+                  </span>
+                  <Link href="/settings/password" className="btn" title="Настройки"><Icon name="settings" /></Link>
+                  <button onClick={() => signOut({ callbackUrl: '/' })} className="btn btn-danger" title="Выйти"><Icon name="logout" /></button>
+                </>
+              ) : (
+                <>
+                  <Link href="/login" className="btn btn-primary"><Icon name="login" />Войти</Link>
+                  <Link href="/register/logoped" className="btn"><Icon name="plus" />Логопед</Link>
+                  <Link href="/register/parent" className="btn"><Icon name="plus" />Родитель</Link>
+                </>
+              )}
+            </>
+          )}
+        </div>
+        {/* Мобильная панель справа: тумблер темы + бейдж пользователя */}
+        <div className="md:hidden ml-auto flex items-center gap-2">
+          <ThemeQuickToggleMobile initialTheme={(data?.user as any)?.theme as string | undefined} />
+          <MobileUserBadge />
+        </div>
+        {/* Кнопку мобильного бургер-меню удалили: используется нижняя таб-панель */}
+      </nav>
+      {warnDays && (
+        <div className="border-t">
+          <div className="container py-2 text-xs flex items-center justify-between">
+            <div className="text-amber-800">
+              Внимание: подписка заканчивается через {paidLeftDays>0?paidLeftDays:betaLeftDays} дн.
+            </div>
+            <a
+              href={`https://wa.me/89889543377?text=${encodeURIComponent('Здравствуйте! Хочу оплатить подписку. Мой email: ' + (email||''))}`}
+              target="_blank"
+            >Оплатить</a>
+          </div>
+        </div>
+      )}
+    </header>
+    {/* Toasts */}
+    {status !== 'loading' && (
+      <div className="fixed bottom-4 right-4 z-50 space-y-2">
+        {toasts.map(t => (
+          <div key={t.id} className="rounded bg-blue-600 text-white text-xs px-3 py-2 shadow">
+            {t.text}
+          </div>
+        ))}
+      </div>
+    )}
+    </>
+  )
+}

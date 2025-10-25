@@ -1,0 +1,140 @@
+import { PrismaAdapter } from '@next-auth/prisma-adapter'
+import type { NextAuthOptions } from 'next-auth'
+import Credentials from 'next-auth/providers/credentials'
+import GoogleProvider from 'next-auth/providers/google'
+import YandexProvider from 'next-auth/providers/yandex'
+import VKProvider from 'next-auth/providers/vk'
+import { prisma } from './prisma'
+import bcrypt from 'bcrypt'
+
+export const authOptions: NextAuthOptions = {
+  adapter: PrismaAdapter(prisma),
+  session: { strategy: 'jwt' },
+  providers: [
+    Credentials({
+      name: 'credentials',
+      credentials: {
+        email: { label: 'Email', type: 'email' },
+        password: { label: 'Password', type: 'password' },
+      },
+      async authorize(credentials) {
+        const email = credentials?.email?.toLowerCase().trim()
+        const password = credentials?.password || ''
+        if (!email || !password) {
+          console.warn('[auth] Missing credentials')
+          return null
+        }
+        console.log('[auth] credentials attempt', { email })
+        const user = await prisma.user.findUnique({ where: { email }, select: { id: true, email: true, name: true, image: true, role: true, city: true, passwordHash: true, emailVerifiedAt: true } })
+        if (!user) {
+          console.warn('[auth] user not found', { email })
+          return null
+        }
+        let ok = false
+        try { ok = await bcrypt.compare(password, user.passwordHash) } catch (e) { console.error('[auth] bcrypt compare failed', e) }
+        if (!ok) {
+          console.warn('[auth] invalid password', { email })
+          return null
+        }
+        // block login if email not verified and feature flag is on
+        if ((process.env.REQUIRE_EMAIL_VERIFIED || '').toLowerCase() === 'true') {
+          if (!user.emailVerifiedAt) {
+            console.warn('[auth] email not verified', { email })
+            return null
+          }
+        }
+        return { id: user.id, email: user.email ?? undefined, name: user.name ?? undefined, image: user.image ?? undefined, role: user.role, city: user.city ?? undefined }
+      },
+    }),
+    // OAuth providers (conditionally enabled if env vars are present)
+    ...(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET ? [
+      GoogleProvider({
+        clientId: process.env.GOOGLE_CLIENT_ID!,
+        clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+      }),
+    ] : []),
+    ...(process.env.YANDEX_CLIENT_ID && process.env.YANDEX_CLIENT_SECRET ? [
+      YandexProvider({
+        clientId: process.env.YANDEX_CLIENT_ID!,
+        clientSecret: process.env.YANDEX_CLIENT_SECRET!,
+      }),
+    ] : []),
+    ...(process.env.VK_CLIENT_ID && process.env.VK_CLIENT_SECRET ? [
+      VKProvider({
+        clientId: process.env.VK_CLIENT_ID!,
+        clientSecret: process.env.VK_CLIENT_SECRET!,
+      }),
+    ] : []),
+  ],
+  pages: {
+    signIn: '/login',
+  },
+  callbacks: {
+    async redirect({ url, baseUrl }) {
+      try {
+        const target = new URL(url, baseUrl)
+        // Внутренние переходы: отправляем через /after-login, чтобы роль стабильно применилась
+        if (target.origin === baseUrl) {
+          const p = target.pathname
+          // если callback ведёт на защищённые зоны, направляем на after-login
+          if (p.startsWith('/admin') || p.startsWith('/logoped') || p.startsWith('/parent') || p === '/' || p === '/login') {
+            return '/after-login'
+          }
+          return target.toString()
+        }
+        // Внешние домены запрещаем — возвращаемся на сайт
+        return baseUrl
+      } catch {
+        return '/after-login'
+      }
+    },
+    async jwt({ token, user }) {
+      if (user) {
+        const u = user as { id?: string; role?: string; name?: string | null; image?: string | null; theme?: string | null; city?: string | null }
+        const t = token as Record<string, unknown>
+        if (u.role) (t.role = u.role)
+        if (u.id) (t.id = u.id)
+        if (typeof u.name === 'string') t.name = u.name
+        if (typeof u.image === 'string') t.image = u.image
+        if (typeof u.theme === 'string') t.theme = u.theme
+        if (typeof u.city === 'string') t.city = u.city
+      }
+      if (!token.id && token?.email) {
+        const u = await prisma.user.findUnique({ where: { email: token.email } })
+        if (u) {
+          const t = token as Record<string, unknown>
+          ;(t.role = u.role)
+          ;(t.id = u.id)
+          if (u.name) t.name = u.name
+          if (u.image) t.image = u.image
+          if ((u as { theme?: string | null }).theme) t.theme = (u as { theme?: string | null }).theme as string
+          if ((u as { city?: string | null }).city) t.city = (u as { city?: string | null }).city as string
+        }
+      }
+      return token
+    },
+    async session({ session, token }) {
+      if (session.user) {
+        const t = token as Record<string, unknown>
+        const su = session.user as Record<string, unknown>
+        if (typeof t.role === 'string') su.role = t.role
+        if (typeof t.id === 'string') su.id = t.id
+        // по возможности сразу выставим имя/аватар из токена
+        if (typeof t.name === 'string') session.user.name = t.name
+        if (typeof t.image === 'string') su.image = t.image
+        if (typeof t.theme === 'string') su.theme = t.theme
+        if (typeof t.city === 'string') su.city = t.city
+        // Обновим актуальный город из БД (лёгкая выборка), чтобы изменения в профиле были видны без перелогина
+        try {
+          const t2 = token as Record<string, unknown>
+          if (typeof t2.id === 'string') {
+            const u = await prisma.user.findUnique({ where: { id: t2.id }, select: { city: true } })
+            if (u && (u as { city?: string | null }).city) (su.city = (u as { city?: string | null }).city as string)
+          }
+        } catch {}
+        // intentionally skip heavy DB enrich here to avoid post-login flicker; pages can fetch details as needed
+      }
+      return session
+    },
+  },
+}

@@ -1,0 +1,235 @@
+"use server"
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { revalidatePath } from 'next/cache'
+import { redirect } from 'next/navigation'
+import { isValidCity, normalizeCity } from '@/lib/cities'
+
+function isValidTimeZone(tz: string): boolean {
+  try { new Intl.DateTimeFormat('en-US', { timeZone: tz }).format(new Date()); return true } catch { return false }
+}
+
+function normalizeTimeZone(tzRaw: string | null): string | null {
+  const s = (tzRaw || '').trim();
+  if (!s) return 'Europe/Moscow';
+  const low = s.toLowerCase();
+  const map: Record<string,string> = {
+    'utc+3': 'europe/moscow',
+    'utc+03': 'europe/moscow',
+    'msk': 'europe/moscow',
+    'мосcow': 'europe/moscow',
+    'moscow': 'europe/moscow',
+    'мск': 'europe/moscow',
+    'europe/moscow': 'europe/moscow',
+    'russia/moscow': 'europe/moscow',
+  };
+  const mapped = map[low] || s;
+  const canonical = mapped === 'europe/moscow' ? 'Europe/Moscow' : mapped;
+  return isValidTimeZone(canonical) ? canonical : 'Europe/Moscow';
+}
+
+
+export async function updateProfile(formData: FormData) {
+  const session = await getServerSession(authOptions)
+  if (!session?.user) throw new Error('Unauthorized')
+  const userId = String((session.user as { id?: string } | undefined)?.id || '')
+  const name = String(formData.get('name') || '').trim() || null
+  const cityRaw = String(formData.get('city') || '').trim()
+  const city = cityRaw ? normalizeCity(cityRaw) : null
+  const timeZone = normalizeTimeZone(String(formData.get('timeZone') || '').trim())
+  const phoneRaw = String(formData.get('phone') || '').trim()
+  const phone = phoneRaw || null
+  const profession = String(formData.get('profession') || '').trim() || null
+  const experienceYearsStr = String(formData.get('experienceYears') || '').trim()
+  const experienceYears = experienceYearsStr ? Number(experienceYearsStr) : null
+  const specialization = String(formData.get('specialization') || '').trim() || null
+  const about = String(formData.get('about') || '').trim() || null
+  const education = String(formData.get('education') || '').trim() || null
+  // New UX: show* checkboxes (we may have hidden off + checkbox on). Use getAll to detect 'on'.
+  const aboutVals = formData.getAll('showAboutToParents').map(v => String(v))
+  const eduVals = formData.getAll('showEducationToParents').map(v => String(v))
+  const newShowAboutProvided = aboutVals.length > 0
+  const newShowEducationProvided = eduVals.length > 0
+  const showAboutToParents = aboutVals.includes('on')
+  const showEducationToParents = eduVals.includes('on')
+  const oldHideAbout = String(formData.get('hideAboutFromParents') || '') === 'on'
+  const oldHideEducation = String(formData.get('hideEducationFromParents') || '') === 'on'
+  const hideAboutFromParents = newShowAboutProvided ? !showAboutToParents : oldHideAbout
+  const hideEducationFromParents = newShowEducationProvided ? !showEducationToParents : oldHideEducation
+  const address = String(formData.get('address') || '').trim() || null
+  const lessonPriceStr = String(formData.get('lessonPrice') || '').trim()
+  const lessonPrice = lessonPriceStr ? Number(lessonPriceStr) : null
+  const showPriceToParents = String(formData.get('showPriceToParents') || '') === 'on'
+  const isOnline = String(formData.get('isOnline') || '') === 'on'
+  const isOffline = String(formData.get('isOffline') || '') === 'on'
+  const clearBranch = String(formData.get('clearBranch') || '') === 'on'
+
+  const user = await prisma.user.findUnique({ where: { id: userId } })
+  if (!user) throw new Error('User not found')
+
+  // Город обязателен и должен быть из списка
+  if (!city || !isValidCity(city)) {
+    revalidatePath('/settings/profile')
+    redirect('/settings/profile?cityError=1')
+  }
+
+  const data: Record<string, unknown> = { name: name || undefined, city: city || undefined, timeZone: timeZone || undefined }
+  if (user.role === 'LOGOPED') {
+    data.profession = profession || undefined
+    data.experienceYears = typeof experienceYears === 'number' && !Number.isNaN(experienceYears) ? experienceYears : undefined
+    data.specialization = specialization || undefined
+    data.about = about || undefined
+    data.education = education || undefined
+    data.hideEducationFromParents = hideEducationFromParents
+    data.hideAboutFromParents = hideAboutFromParents
+    data.address = address || undefined
+    data.lessonPrice = typeof lessonPrice === 'number' && !Number.isNaN(lessonPrice) ? lessonPrice : undefined
+    data.showPriceToParents = showPriceToParents
+    data.isOnline = isOnline
+    data.isOffline = isOffline
+    if (clearBranch) data.branchId = null
+    // VIP метки устанавливаются только админами в админке
+  }
+  // убрать undefined, чтобы Prisma не получал ключи с undefined
+  Object.keys(data).forEach((k) => {
+    if ((data as Record<string, unknown>)[k] === undefined) delete (data as Record<string, unknown>)[k]
+  })
+  // Нормализация телефона к +7E164 (используется для обеих ролей)
+  function normalizeInstagram(v: string): string | null {
+      const x=(v||'').trim()
+      if(!x) return null
+      let h=x
+      h=h.replace(/^https?:\/\/www\./, 'https://')
+      h=h.replace(/^https?:\/\/(?:instagram\.com|www\.instagram\.com)\//, '')
+      h=h.replace(/\?.*$/, '')
+      h=h.replace(/\/#.*$/, '')
+      h=h.replace(/\/$/, '')
+      h=h.replace(/^@/, '')
+      if(!h) return null
+      return h
+    }
+
+    function normalizePhoneToPlus7(v: string): string | null {
+    const d = (v || '').replace(/\D/g, '')
+    if (!d) return null
+    let n = d
+    if (n.startsWith('8')) n = '7' + n.slice(1)
+    if (!n.startsWith('7')) n = '7' + n
+    n = n.substring(0, 11)
+    if (n.length !== 11) return null
+    return '+' + n
+  }
+
+  // Для логопеда: сохраняем телефон в User.phone с проверкой
+  if (user.role === 'LOGOPED') {
+    let phoneNormalized: string | null = null
+    if (phone) phoneNormalized = normalizePhoneToPlus7(phone)
+    if (phone && !phoneNormalized) {
+      revalidatePath('/settings/profile')
+      redirect('/settings/profile?phoneError=1')
+    }
+    data.phone = phoneNormalized || undefined
+  }
+
+  try {
+    await prisma.user.update({ where: { id: userId }, data })
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    if (msg.includes('Unknown argument `phone`')) {
+      try { delete (data as Record<string, unknown>).phone } catch {}
+      await prisma.user.update({ where: { id: userId }, data })
+      revalidatePath('/settings/profile')
+      redirect('/settings/profile?phoneNotSupported=1')
+    }
+    if (msg.includes('Unknown argument `instagram`')) {
+      try { delete (data as Record<string, unknown>).instagram } catch {}
+      await prisma.user.update({ where: { id: userId }, data })
+      revalidatePath('/settings/profile')
+      redirect('/settings/profile?instagramNotSupported=1')
+    }
+    throw e
+  
+  // Raw SQL fallback for instagram to avoid Prisma client mismatches
+  try {
+    const ig = normalizeInstagram(instagram || '')
+    if (ig) {
+      await prisma.$executeRawUnsafe('UPDATE "User" SET instagram = $1, "updatedAt" = now() WHERE id = $2', ig, userId)
+    }
+  } catch {}
+
+  if (user.role === 'PARENT') {
+
+    // parent profile extras
+    const parent = await prisma.parent.findUnique({ where: { userId } })
+    if (parent) {
+      let phoneNormalized: string | null = null
+      if (phone) phoneNormalized = normalizePhoneToPlus7(phone)
+      if (phone && !phoneNormalized) {
+        revalidatePath('/settings/profile')
+        redirect('/settings/profile?phoneError=1')
+      }
+      await prisma.parent.update({ where: { id: parent.id }, data: { fullName: name || parent.fullName || undefined, phone: phoneNormalized || undefined } })
+    }
+  }
+  revalidatePath('/settings/profile')
+  redirect('/settings/profile?saved=1')
+}
+
+export async function uploadAvatar(formData: FormData) {
+  const session = await getServerSession(authOptions)
+  if (!session?.user) throw new Error('Unauthorized')
+  const userId = String((session.user as { id?: string } | undefined)?.id || '')
+  const file = formData.get('file') as File | null
+  if (!file) return
+  const mime = file.type || ''
+  const size = file.size || 0
+  if (!mime.startsWith('image/') || size > 10 * 1024 * 1024) {
+    revalidatePath('/settings/profile')
+    redirect('/settings/profile?photoError=1')
+  }
+  const array = await file.arrayBuffer()
+  const buffer = Buffer.from(array)
+  const { promises: fs } = await import('fs')
+  const path = await import('path')
+  const dir = path.join(process.cwd(), 'public', 'uploads', 'avatars')
+  await fs.mkdir(dir, { recursive: true })
+  const ts = new Date().toISOString().replace(/[:.]/g,'-')
+  const safe = (file.name || 'avatar.jpg').replace(/[^a-zA-Z0-9._-]+/g,'_')
+  const name = `${userId}_${ts}_${safe}`
+  const full = path.join(dir, name)
+  await fs.writeFile(full, buffer)
+  const url = `/uploads/avatars/${name}`
+  await prisma.user.update({ where: { id: userId }, data: { image: url } })
+  revalidatePath('/settings/profile')
+  redirect('/settings/profile?saved=1')
+}
+
+export async function deleteAvatar() {
+  const session = await getServerSession(authOptions)
+  if (!session?.user) throw new Error('Unauthorized')
+  const userId = String((session.user as { id?: string } | undefined)?.id || '')
+  await prisma.user.update({ where: { id: userId }, data: { image: null } })
+  revalidatePath('/settings/profile')
+  redirect('/settings/profile?saved=1')
+}
+
+export async function updateTheme(formData: FormData) {
+  const session = await getServerSession(authOptions)
+  if (!session?.user) throw new Error('Unauthorized')
+  const userId = String((session.user as { id?: string } | undefined)?.id || '')
+  const theme = String(formData.get('theme') || '').trim() || null
+  const quick = String(formData.get('quick') || '').trim()
+  const source = String(formData.get('source') || '').trim()
+  try {
+    await prisma.user.update({ where: { id: userId }, data: { theme } })
+  } catch (e: unknown) {
+    console.warn('updateTheme: prisma.user.update failed, fallback to client-only theme', e)
+  }
+  // Если переключение пришло из навбара/быстрого тумблера — не редиректим и не рефрешим страницу
+  if (quick === '1' || source === 'navbar') {
+    return
+  }
+  revalidatePath('/settings/profile')
+  redirect('/settings/profile?saved=1')
+}

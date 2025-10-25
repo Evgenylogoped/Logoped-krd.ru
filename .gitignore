@@ -1,0 +1,19 @@
+# .gitignore (ensuring large/binary artifacts are excluded)
+node_modules/
+.next/
+.env*
+npm-debug.log*
+yarn.lock
+pnpm-lock.yaml
+.DS_Store
+coverage/
+dist/
+# runtime/user content
+public/uploads/
+public/media/
+# backups and archives
+backups/
+*.zip
+*.tar.gz
+*.sql.gz
+*.log
