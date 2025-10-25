@@ -7,6 +7,8 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 
 const pexec = promisify(exec)
+const LOG = '/tmp/backup_etalon.log'
+const LOCK = '/tmp/backup_etalon.lock'
 
 async function ensureSuperAdmin() {
   const session = await getServerSession(authOptions)
@@ -15,9 +17,22 @@ async function ensureSuperAdmin() {
   return session
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   const session = await ensureSuperAdmin()
   if (!session) return NextResponse.json({ error: 'FORBIDDEN' }, { status: 403 })
+
+  const url = new URL(request.url)
+  if (url.searchParams.get('status')) {
+    let running = false
+    try { await fs.stat(LOCK); running = true } catch {}
+    let tail = ''
+    try {
+      const { stdout } = await pexec(`bash -lc "[ -f ${LOG} ] && tail -n 100 ${LOG} || true"`)
+      tail = stdout
+    } catch {}
+    return NextResponse.json({ ok: true, running, tail })
+  }
+
   const NAS_BASE = process.env.NAS_BASE || '/mnt/nas_logoped'
   const ETALON_DIR = process.env.ETALON_DIR || path.join(NAS_BASE, 'etalon')
   const candidates = [ETALON_DIR, NAS_BASE]
@@ -42,8 +57,14 @@ export async function POST() {
   const session = await ensureSuperAdmin()
   if (!session) return NextResponse.json({ error: 'FORBIDDEN' }, { status: 403 })
   try {
-    const { stdout, stderr } = await pexec('/usr/local/bin/backup_logoped_etalon.sh')
-    return NextResponse.json({ ok: true, stdout, stderr: stderr || undefined })
+    // If already running — do not start another one
+    const check = await pexec(`bash -lc '[ -f ${LOCK} ] && echo RUNNING || true'`)
+    if ((check.stdout || '').includes('RUNNING')) {
+      return NextResponse.json({ ok: true, started: false, running: true, note: 'Already running' })
+    }
+    // Start async in background with lock and logging
+    await pexec(`bash -lc 'nohup bash -lc "( set -e; date; echo START; touch ${LOCK}; /usr/local/bin/backup_logoped_etalon.sh; RC=$?; echo rc=$RC; rm -f ${LOCK}; echo DONE; date )" >> ${LOG} 2>&1 & disown'`)
+    return NextResponse.json({ ok: true, started: true })
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: String(e?.message || e) }, { status: 500 })
   }
