@@ -3,7 +3,6 @@ name: Build and Push Docker image
 on:
   push:
     branches: [ main ]
-    tags: [ 'v*', 'release-*' ]
   workflow_dispatch:
 
 env:
@@ -31,15 +30,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata (tags, labels)
+      - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=ref,event=branch
-            type=ref,event=tag
-            type=sha
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -48,6 +45,5 @@ jobs:
           file: Dockerfile.prod
           push: true
           tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
