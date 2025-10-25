@@ -7,7 +7,6 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  # ВАЖНО: зафиксировано lowercase имя образа
   IMAGE_NAME: evgenylogoped/logoped-krd.ru
 
 jobs:
