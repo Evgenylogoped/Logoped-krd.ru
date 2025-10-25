@@ -3,8 +3,7 @@ name: E2E (Playwright)
 on:
   push:
     branches: [ main ]
-  pull_request:
-    branches: [ main ]
+  workflow_dispatch:
 
 concurrency:
   group: e2e-${{ github.ref }}
@@ -13,11 +12,28 @@ concurrency:
 jobs:
   e2e:
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        ports:
+          - 5432:5432
+        env:
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+          POSTGRES_DB: logoped
+        options: >-
+          --health-cmd="pg_isready -U app -d logoped" \
+          --health-interval=5s --health-timeout=5s --health-retries=10
+
     env:
+      NODE_ENV: test
       NEXTAUTH_URL: http://localhost:3000
-      NEXTAUTH_SECRET: ci-e2e-secret
+      NEXTAUTH_SECRET: e2e-e2e-secret
       ENABLE_TEST_LOGIN: '1'
+      DATABASE_URL: postgresql://app:app@localhost:5432/logoped?schema=public
       CI: 'true'
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,16 +45,19 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm i
+        run: npm ci
 
       - name: Generate Prisma Client
         run: npx prisma generate
 
-      - name: Install Playwright Browsers
-        run: npx playwright install --with-deps
+      - name: Run DB migrations
+        run: npx prisma migrate deploy
 
       - name: Seed E2E data
         run: node prisma/seed-e2e.cjs
+
+      - name: Install Playwright Browsers
+        run: npx playwright install --with-deps
 
       - name: Run Playwright tests
         run: npm run test:e2e

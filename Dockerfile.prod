@@ -1,48 +1,24 @@
 # syntax=docker/dockerfile:1.7
 ARG NODE_VERSION=18.20.4-bullseye-slim
 
-# 1) deps: ставим и prod, и dev (без NODE_ENV=production)
 FROM node:${NODE_VERSION} AS deps
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY package*.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
 
-# 2) builder: генерируем Prisma Client и собираем Next
 FROM node:${NODE_VERSION} AS builder
 WORKDIR /app
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
-    PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1 \
-    # Безопасные заглушки для сборки (не секреты)
-    DATABASE_URL=postgresql://user:pass@localhost:5432/db?schema=public \
-    NEXTAUTH_URL=http://localhost:3000 \
-    NEXTAUTH_SECRET=dummy \
-    NEXT_PUBLIC_BASE_URL=http://localhost:3000 \
-    TURNSTILE_SITEKEY=dummy \
-    TURNSTILE_SECRET=dummy \
-    SMTP_HOST=localhost \
-    SMTP_PORT=25 \
-    SMTP_USER=dummy \
-    SMTP_PASS=dummy \
-    SMTP_SECURE=false \
-    SMTP_FROM=noreply@example.com \
-    REQUIRE_EMAIL_VERIFIED=false
-
+    PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-
-# Prisma Client нужен до билда Next (если импортируется при сборке)
 RUN npx prisma generate
-
-# Перестраховка для нативных модулей
 RUN npm rebuild sharp --unsafe-perm || true \
  && npm rebuild lightningcss --unsafe-perm || true
-
-# Отключаем тяжёлые оптимизации CSS (смотрите next.config.js)
 RUN NEXT_DISABLE_OPTIMIZED_CSS=1 npm run build
 
-# 3) runner: минимальный рантайм
 FROM node:${NODE_VERSION} AS runner
 WORKDIR /app
 ENV NODE_ENV=production \
@@ -53,5 +29,4 @@ COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/prisma ./prisma
 COPY package*.json ./
-# Мягкая гарантия на случай отличий схемы БД в рантайме
 CMD ["sh","-lc","npx prisma generate || true; npm start"]
