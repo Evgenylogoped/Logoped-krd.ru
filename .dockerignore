@@ -33,3 +33,5 @@ backups/**
 
 # Docker backups
 Dockerfile.bak*
+**/._*
+.DS_Store
