@@ -17,3 +17,4 @@ backups/
 *.tar.gz
 *.sql.gz
 *.log
+**/._*
