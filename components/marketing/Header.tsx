@@ -24,8 +24,8 @@ export default function MarketingHeader() {
       <div className="hidden sm:flex mx-auto max-w-screen-xl px-4 h-14 items-center justify-between">
         <div className="flex items-center gap-2">
           <Link href="/" className="flex items-center gap-2">
-            <div className="h-7 w-7 rounded bg-indigo-600 text-white flex items-center justify-center font-bold">Л</div>
-            <span className="font-semibold">Логопед Платформа</span>
+            <Image src="/logo.png" alt="My Logoped" width={28} height={28} className="rounded" />
+            <span className="font-semibold">My Logoped</span>
           </Link>
         </div>
         <nav className="flex items-center gap-4 text-sm text-gray-600">
@@ -33,7 +33,7 @@ export default function MarketingHeader() {
           <Link href="#audience" className="hover:text-gray-900">Кому подходит</Link>
           <Link href="#screens" className="hover:text-gray-900">Скриншоты</Link>
           <Link href="#testimonials" className="hover:text-gray-900">Отзывы</Link>
-          <Link href="#pricing" className="hover:text-gray-900">Тарифы</Link>
+          <Link href="#subscriptions" className="hover:text-gray-900">Тарифы</Link>
           <Link href="#faq" className="hover:text-gray-900">FAQ</Link>
         </nav>
         <div className="flex items-center gap-2">
@@ -53,8 +53,8 @@ export default function MarketingHeader() {
       {/* Mobile header */}
       <div className="sm:hidden mx-auto max-w-screen-xl px-4 h-14 grid grid-cols-2 items-center">
         <Link href="/" className="flex items-center gap-2">
-          <div className="h-7 w-7 rounded bg-indigo-600 text-white flex items-center justify-center font-bold">Л</div>
-          <span className="font-semibold">Логопед</span>
+          <Image src="/logo.png" alt="My Logoped" width={28} height={28} className="rounded" />
+          <span className="font-semibold">My Logoped</span>
         </Link>
         <div className="ml-auto flex items-center gap-2">
           <div className="flex items-center gap-2">

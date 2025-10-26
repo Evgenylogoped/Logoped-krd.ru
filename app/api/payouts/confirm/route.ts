@@ -100,5 +100,9 @@ export async function POST(req: NextRequest) {
     (prisma as any).payoutRequest.update({ where: { id: payoutId }, data: { status: 'PAID', confirmedAt: new Date(), confirmedById: adminId } })
   ])
 
-  return NextResponse.redirect(new URL('/admin/finance/payouts', req.url), 303)
+  // Build absolute URL based on original forwarded origin to avoid "localhost" redirects behind proxy
+  const proto = req.headers.get('x-forwarded-proto') || 'https'
+  const host = req.headers.get('x-forwarded-host') || req.headers.get('host') || 'logoped-krd.ru'
+  const origin = `${proto}://${host}`
+  return NextResponse.redirect(new URL('/admin/finance/payouts', origin), 303)
 }

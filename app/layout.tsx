@@ -24,14 +24,14 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: {
-    default: 'Logoped — платформа для логопедов, родителей и организаций',
-    template: '%s · Logoped',
+    default: 'My Logoped — платформа для логопедов, родителей и организаций',
+    template: '%s · My Logoped',
   },
-  description: 'Расписание, консультации, записи и платежи — всё в одном месте. Красиво, просто и мобильно.',
+  description: 'My Logoped — расписание, консультации, записи и платежи. Красиво, просто и мобильно.',
   metadataBase: new URL('https://logoped-krd.ru'),
   openGraph: {
-    title: 'Logoped — платформа для логопедов, родителей и организаций',
-    description: 'Расписание, консультации, записи и платежи — всё в одном месте. Красиво, просто и мобильно.',
+    title: 'My Logoped — платформа для логопедов, родителей и организаций',
+    description: 'My Logoped — расписание, консультации, записи и платежи. Красиво, просто и мобильно.',
     type: 'website',
     images: [
       { url: '/og.svg', width: 1200, height: 630 },
@@ -40,8 +40,8 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'Logoped — платформа для логопедов, родителей и организаций',
-    description: 'Расписание, консультации, записи и платежи — всё в одном месте. Красиво, просто и мобильно.',
+    title: 'My Logoped — платформа для логопедов, родителей и организаций',
+    description: 'My Logoped — расписание, консультации, записи и платежи. Красиво, просто и мобильно.',
     images: ['/og.svg', '/og'],
   },
   icons: {
@@ -71,21 +71,21 @@ export default async function RootLayout({
         {/* iOS PWA fullscreen */}
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-        <meta name="apple-mobile-web-app-title" content="Logoped" />
+        <meta name="apple-mobile-web-app-title" content="My Logoped" />
         <link rel="manifest" href="/manifest.json" />
         <link rel="icon" href="/icons/favicon.svg" type="image/svg+xml" />
         <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
         <link rel="icon" type="image/png" sizes="16x16" href="/icons/favicon-16.png" />
         <link rel="apple-touch-icon" href="/icons/apple-touch-icon-180.png" />
         {/* Open Graph / Twitter */}
-        <meta property="og:title" content="logoped-krd" />
+        <meta property="og:title" content="My Logoped" />
         <meta property="og:description" content="Платформа logoped-krd.ru" />
         <meta property="og:type" content="website" />
         <meta property="og:image" content="/og.png" />
         <meta property="og:image:width" content="1200" />
         <meta property="og:image:height" content="630" />
         <meta name="twitter:card" content="summary_large_image" />
-        <meta name="twitter:title" content="logoped-krd" />
+        <meta name="twitter:title" content="My Logoped" />
         <meta name="twitter:description" content="Платформа logoped-krd.ru" />
         <meta name="twitter:image" content="/og.png" />
       </head>

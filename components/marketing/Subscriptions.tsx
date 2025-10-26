@@ -1,67 +1,103 @@
-"use client";
 import React from "react";
+import { getPlanPrices, getConfigLimits } from "@/lib/subscriptions";
 
-export default function Subscriptions() {
-  const subs = [
+function formatRub(v: number | null | undefined): string {
+  if (v == null) return "—";
+  try { return `${Number(v).toLocaleString('ru-RU')} ₽`; } catch { return `${v} ₽`; }
+}
+
+export default async function Subscriptions() {
+  const [prices, limits] = await Promise.all([getPlanPrices(), getConfigLimits()])
+  const plans = [
     {
-      name: "Бесплатно",
-      badge: "для старта",
-      price: "0 ₽",
-      note: "Навсегда",
+      key: 'beta',
+      name: 'BETA',
+      badge: 'тестовый доступ',
+      price: '0 ₽',
+      period: '',
       bullets: [
-        "Личный кабинет родителя",
-        "Расписание и записи",
-        "Оценки занятий",
+        `Филиалы: ${limits.beta.branches}`,
+        `Логопеды: ${limits.beta.logopeds}`,
+        `Медиа: ${limits.beta.mediaMB} MB`,
       ],
-      cta: { label: "Начать", href: "/register" },
+      cta: { label: 'Начать', href: '/register' },
     },
     {
-      name: "Премиум",
-      badge: "для логопеда",
-      price: "990 ₽",
-      note: "/мес",
+      key: 'free',
+      name: 'FREE',
+      badge: 'для старта',
+      price: '0 ₽',
+      period: '',
+      bullets: [
+        `Филиалы: ${limits.free.branches}`,
+        `Логопеды: ${limits.free.logopeds}`,
+        `Медиа: ${limits.free.mediaMB} MB`,
+      ],
+      cta: { label: 'Начать', href: '/register' },
+    },
+    {
+      key: 'pro',
+      name: 'PRO',
+      badge: 'для логопеда',
+      price: formatRub(prices.pro.month),
+      period: '/мес',
       highlight: true,
       bullets: [
-        "Абонементы и оплаты",
-        "Чаты и напоминания",
-        "Экспорт и отчёты",
-        "Приём платежей",
+        `Филиалы: ${limits.pro.branches}`,
+        `Логопеды: ${limits.pro.logopeds}`,
+        `Медиа: ${limits.pro.mediaMB} MB`,
       ],
-      cta: { label: "Попробовать 14 дней", href: "/register/logoped" },
+      cta: { label: 'Оформить', href: '/login' },
     },
     {
-      name: "Организация",
-      badge: "для сети",
-      price: "индивидуально",
-      note: "",
+      key: 'pro_plus',
+      name: 'PRO+',
+      badge: 'для практики',
+      price: formatRub(prices.pro_plus.month),
+      period: '/мес',
       bullets: [
-        "Филиалы и роли",
-        "Выплаты логопедам",
-        "Отчётность и лимиты",
+        `Филиалы: ${limits.pro_plus.branches}`,
+        `Логопеды: ${limits.pro_plus.logopeds}`,
+        `Медиа: ${limits.pro_plus.mediaMB} MB`,
+        `Поддержка: приоритетная`,
       ],
-      cta: { label: "Связаться", href: "mailto:info@logoped-krd.ru" },
+      cta: { label: 'Оформить', href: '/login' },
     },
-  ];
+    {
+      key: 'max',
+      name: 'MAX',
+      badge: 'для организации',
+      price: formatRub(prices.max.month),
+      period: '/мес',
+      bullets: [
+        `Филиалы: ${limits.max.branches}`,
+        `Логопеды: ${limits.max.logopeds}`,
+        `Медиа: ${limits.max.mediaMB} MB`,
+        `Статистика филиалов: ${limits.max.stats.branch ? 'да' : 'нет'}`,
+      ],
+      cta: { label: 'Запросить', href: '/settings/billing' },
+    },
+  ] as const
 
   return (
     <section className="mx-auto max-w-screen-xl px-4 py-12 sm:py-16">
       <div className="text-center">
         <h2 className="text-3xl sm:text-4xl font-extrabold tracking-tight">Подписки</h2>
-        <p className="mt-2 text-muted">Прозрачно, без мелкого шрифта. Отмена в один клик.</p>
+        <p className="mt-2 text-muted">Цены и лимиты подтягиваются из админки автоматически.</p>
       </div>
-      <div className="mt-8 grid gap-4 sm:grid-cols-3">
-        {subs.map((s) => (
-          <div key={s.name} className={`rounded-2xl border bg-white p-6 relative ${s.highlight ? 'ring-2 ring-indigo-500 shadow-lg' : ''}`}>
-            <div className="text-xs uppercase tracking-wide text-indigo-600">{s.badge}</div>
-            <div className="mt-1 text-lg font-semibold">{s.name}</div>
-            <div className="mt-3 text-4xl font-extrabold">{s.price} <span className="text-base font-medium text-muted">{s.note}</span></div>
+      <div className="mt-8 grid gap-4 sm:grid-cols-5">
+        {plans.map((p) => (
+          <div key={p.key} className={`rounded-2xl border bg-white p-6 relative ${((p as any).highlight ? 'ring-2 ring-indigo-500 shadow-lg' : '')}`}>
+            <div className="text-xs uppercase tracking-wide text-indigo-600">{p.badge}</div>
+            <div className="mt-1 text-lg font-semibold">{p.name}</div>
+            <div className="mt-3 text-4xl font-extrabold">{p.price} <span className="text-base font-medium text-muted">{p.period}</span></div>
             <ul className="mt-4 space-y-2 text-sm">
-              {s.bullets.map((b)=> (
-                <li key={b} className="flex items-start gap-2"><span className="emoji-bubble">✨</span><span>{b}</span></li>
+              {p.bullets.map((b)=> (
+                <li key={b} className="flex items-start gap-2"><span className="emoji-bubble">✓</span><span>{b}</span></li>
               ))}
             </ul>
             <div className="mt-6">
-              <a href={s.cta.href} className={`btn ${s.highlight? 'btn-primary btn-shine' : 'btn-outline'}`}>{s.cta.label}</a>
+              <a href={p.cta.href} className={`btn ${((p as any).highlight ? 'btn-primary btn-shine' : 'btn-outline')}`}>{p.cta.label}</a>
             </div>
           </div>
         ))}
