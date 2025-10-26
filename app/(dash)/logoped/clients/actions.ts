@@ -94,7 +94,11 @@ export async function createParentAndChild(formData: FormData): Promise<void> {
   const childLastName = String(formData.get('childLastName') || '')
   if (!email || !childFirstName || !childLastName) throw new Error('Заполните email и ФИО ребёнка')
   const exists = await (prisma as any).user.findUnique({ where: { email } })
-  if (exists) throw new Error('Пользователь с таким email уже существует')
+  if (exists) {
+    // Пользователь уже существует — перенаправим на форму поиска с подсветкой статуса,
+    // чтобы логопед мог создать карточку ребёнка для существующего родителя
+    redirect(`/logoped/clients?search=${encodeURIComponent(email)}&op=exists`)
+  }
   // Город по умолчанию: город логопеда
   const logopedCityRaw = ((session!.user as any).city as string | undefined) || ((meUser as any)?.city as string | undefined) || ''
   const city = isValidCity(logopedCityRaw) ? normalizeCity(logopedCityRaw) : null
