@@ -1,8 +1,17 @@
-const CACHE_NAME = 'logoped-cache-v4';
+const CACHE_NAME = 'logoped-cache-v6';
 const PRECACHE_URLS = [
   '/',
+  '/offline',
   '/manifest.json',
   '/icons/favicon.svg',
+  '/icons/favicon-16.png',
+  '/icons/favicon-32.png',
+  '/icons/apple-touch-icon-180.png',
+  '/icons/safari-pinned-tab.svg',
+  '/screens/hero-1.png',
+  '/screens/hero-2.png',
+  '/screens/hero-3.png',
+  '/screens/hero-4.png',
 ];
 
 self.addEventListener('install', (event) => {
@@ -33,11 +42,11 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 2) Навигация (HTML) — всегда сеть, чтобы не ловить устаревшие HTML сессии
+  // 2) Навигация (HTML) — сеть, при оффлайне отдаём оффлайн-страницу
   const accept = req.headers.get('accept') || '';
   if (req.mode === 'navigate' || accept.includes('text/html')) {
     event.respondWith(
-      fetch(req).catch(() => caches.match('/'))
+      fetch(req).catch(() => caches.match('/offline'))
     );
     return;
   }
