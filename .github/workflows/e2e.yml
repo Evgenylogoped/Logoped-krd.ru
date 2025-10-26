@@ -23,10 +23,7 @@ jobs:
           POSTGRES_USER: app
           POSTGRES_PASSWORD: app
           POSTGRES_DB: logoped
-        options: >-
-          --health-cmd="pg_isready -U app -d logoped" \
-          --health-interval=5s --health-timeout=5s --health-retries=30 \
-          --health-start-period=30s
+        options: --health-cmd="pg_isready -U app -d logoped" --health-interval=5s --health-timeout=5s --health-retries=30 --health-start-period=30s
 
     env:
       NODE_ENV: test
