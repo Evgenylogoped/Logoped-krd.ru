@@ -63,7 +63,7 @@ export async function POST() {
       return NextResponse.json({ ok: true, started: false, running: true, note: 'Already running' })
     }
     // Start async in background with lock and logging
-    await pexec(`bash -lc 'setsid bash -lc '( set -e; date; echo START; touch /tmp/backup_etalon.lock; /usr/local/bin/backup_logoped_etalon.sh; RC=0; echo rc=; rm -f /tmp/backup_etalon.lock; echo DONE; date )' >> /tmp/backup_etalon.log 2>nohup bash -lc "( set -e; date; echo START; touch ${LOCK}; /usr/local/bin/backup_logoped_etalon.sh; RC=$?; echo rc=$RC; rm -f ${LOCK}; echo DONE; date )" >> ${LOG} 2>&1 & disown'`)1 nohup bash -lc "( set -e; date; echo START; touch ${LOCK}; /usr/local/bin/backup_logoped_etalon.sh; RC=$?; echo rc=$RC; rm -f ${LOCK}; echo DONE; date )" >> ${LOG} 2>&1 & disown'`)
+    await pexec(`setsid bash -lc '( set -e; date; echo START; touch ${LOCK}; /usr/local/bin/backup_logoped_etalon.sh; RC=$?; echo rc=$RC; rm -f ${LOCK}; echo DONE; date )' >> ${LOG} 2>&1 &`)
     return NextResponse.json({ ok: true, started: true })
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: String(e?.message || e) }, { status: 500 })

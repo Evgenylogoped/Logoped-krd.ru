@@ -11,10 +11,14 @@ dist/
 # runtime/user content
 public/uploads/
 public/media/
-# backups and archives
-backups/
+# backups and archives (only root-level backups folder)
+/backups/
 *.zip
 *.tar.gz
 *.sql.gz
 *.log
 **/._*
+
+# allow API route in app/api/admin/backups
+!app/api/admin/backups/
+!app/api/admin/backups/**
