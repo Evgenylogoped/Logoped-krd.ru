@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1000" viewBox="0 0 1000 1000">
+  <rect width="1000" height="1000" fill="black"/>
+  <g fill="white">
+    <circle cx="500" cy="500" r="380"/>
+    <text x="500" y="560" text-anchor="middle" font-family="Inter, system-ui, -apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-weight="800" font-size="420">Л</text>
+  </g>
+</svg>
