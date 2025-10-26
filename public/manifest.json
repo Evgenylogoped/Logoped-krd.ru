@@ -1,7 +1,7 @@
 {
-  "name": "Logoped KRD",
-  "short_name": "Logoped",
-  "description": "Онлайн-платформа для логопедов, родителей и организаций",
+  "name": "My Logoped",
+  "short_name": "My Logoped",
+  "description": "My Logoped — платформа для логопедов, родителей и организаций",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

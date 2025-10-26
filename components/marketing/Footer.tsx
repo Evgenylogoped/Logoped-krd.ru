@@ -11,6 +11,8 @@ export default function Footer() {
           <Link href="/privacy" className="hover:underline">Политика конфиденциальности</Link>
           <Link href="/terms" className="hover:underline">Пользовательское соглашение</Link>
           <a href="https://instagram.com/My_logoped" target="_blank" rel="noopener" className="hover:underline">Instagram: @My_logoped</a>
+          <a href="https://t.me/My_logoped" target="_blank" rel="noopener" className="hover:underline">Telegram</a>
+          <a href="https://wa.me/79889543377" target="_blank" rel="noopener" className="hover:underline">WhatsApp</a>
         </div>
       </div>
       <div className="mt-3 text-center sm:text-right">
