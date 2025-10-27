@@ -23,7 +23,9 @@ async function ensureChatAllowed(userId: string) {
   // Родителям чат доступен всегда — вне зависимости от планов/квот
   try {
     const u = await (prisma as any).user.findUnique({ where: { id: userId }, select: { role: true } })
-    if ((u?.role as string | undefined) === 'PARENT') return
+    const role = (u?.role as string | undefined) || ''
+    // Разрешаем без ограничений: PARENT, LOGOPED, ADMIN, SUPER_ADMIN
+    if (role === 'PARENT' || role === 'LOGOPED' || role === 'ADMIN' || role === 'SUPER_ADMIN') return
   } catch {}
   const plan = await getUserPlan(userId)
   const limits = await getLimits(plan)
