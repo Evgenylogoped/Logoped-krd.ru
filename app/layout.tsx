@@ -134,26 +134,34 @@ export default async function RootLayout({
           }}
         />
         <AuthProvider>
-          {/* Десктоп-сайдбар */}
-          <Suspense fallback={null}>
-            <DesktopSidebar role={(s?.user as any)?.role as string | undefined} city={(s?.user as any)?.city as string | undefined} />
-          </Suspense>
-          {/* Верхняя навигация */}
-          <Suspense fallback={null}>
-            <NavBar />
-          </Suspense>
+          {isAuthed && (
+            <>
+              {/* Десктоп-сайдбар */}
+              <Suspense fallback={null}>
+                <DesktopSidebar role={(s?.user as any)?.role as string | undefined} city={(s?.user as any)?.city as string | undefined} />
+              </Suspense>
+              {/* Верхняя навигация */}
+              <Suspense fallback={null}>
+                <NavBar />
+              </Suspense>
+            </>
+          )}
           {children}
           <PWARegister />
           <PrefetchImportant />
-          {/* Автопереходы на мобиле */}
-          <Suspense fallback={null}>
-            <MobileAutoRedirect />
-          </Suspense>
-          {/* Нижняя таб-панель для мобильных */}
-          <div className="md:hidden h-14" />
-          <Suspense fallback={null}>
-            <MobileTabBar role={(s?.user as any)?.role as string | undefined} />
-          </Suspense>
+          {isAuthed && (
+            <>
+              {/* Автопереходы на мобиле */}
+              <Suspense fallback={null}>
+                <MobileAutoRedirect />
+              </Suspense>
+              {/* Нижняя таб-панель для мобильных */}
+              <div className="md:hidden h-14" />
+              <Suspense fallback={null}>
+                <MobileTabBar role={(s?.user as any)?.role as string | undefined} />
+              </Suspense>
+            </>
+          )}
         </AuthProvider>
       </body>
     </html>
