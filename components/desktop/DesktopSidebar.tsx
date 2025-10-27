@@ -41,10 +41,10 @@ export default function DesktopSidebar({ role: roleProp, city: cityProp }: { rol
     }
   })
   const cityRaw = (cityProp as string | undefined)?.trim()
-  // Флаги по умолчанию, без динамических догрузок, чтобы исключить перепрыгивания меню
-  const isLeader = false
-  const inOrg = false
-  const plan: 'beta'|'free'|'pro'|'pro_plus'|'max' = 'free'
+  // Флаги по умолчанию теперь зависят от роли, чтобы не прятать разделы
+  const isLeader = ['ADMIN','SUPER_ADMIN','ACCOUNTANT','SUPERVISOR','OWNER','LEADER','MANAGER','ORGANIZER'].includes(roleU)
+  const inOrg = true
+  const plan: 'beta'|'free'|'pro'|'pro_plus'|'max' = 'pro_plus'
 
   function togglePin() {
     const next = !pinned
