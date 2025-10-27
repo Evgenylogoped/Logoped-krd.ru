@@ -36,8 +36,7 @@ export const metadata: Metadata = {
     url: 'https://logoped-krd.ru',
     type: 'website',
     images: [
-      { url: '/og.svg', width: 1200, height: 630 },
-      { url: '/og', width: 1200, height: 630 },
+      { url: '/og.png', width: 1200, height: 630 },
     ],
   },
   twitter: {
