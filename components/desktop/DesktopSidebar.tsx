@@ -2,7 +2,6 @@
 import React from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { useSession } from "next-auth/react"
 import Icon from "@/components/Icon"
 import ChatUnreadBadge from "@/components/chat/ChatUnreadBadge"
 import NotificationsBadge from "@/components/notifications/NotificationsBadge"
@@ -27,8 +26,9 @@ function Item({ href, icon, label, title, collapsed=false }: { href: string; ico
 }
 
 export default function DesktopSidebar({ role: roleProp, city: cityProp }: { role?: string; city?: string }) {
-  const { data } = useSession()
-  const role = (roleProp as any) ?? ((data?.user as any)?.role as string | undefined)
+  const [user, setUser] = React.useState<any>(null)
+  const role = (roleProp as any) ?? ((user as any)?.role as string | undefined)
+  const roleU = (role || '').toUpperCase()
   const [pinned, setPinned] = React.useState<boolean>(() => {
     try {
       if (typeof window === "undefined") return true;
@@ -40,7 +40,7 @@ export default function DesktopSidebar({ role: roleProp, city: cityProp }: { rol
       return true;
     }
   })
-  const cityRaw = (cityProp ?? ((data?.user as any)?.city as string | undefined))?.trim()
+  const cityRaw = (cityProp ?? ((user as any)?.city as string | undefined))?.trim()
   const [isLeader, setIsLeader] = React.useState<boolean>(false)
   const [inOrg, setInOrg] = React.useState<boolean>(false)
   const [plan, setPlan] = React.useState<'beta'|'free'|'pro'|'pro_plus'|'max'|undefined>(undefined)// Загрузка признаков лидер/состоит в организации
@@ -48,6 +48,16 @@ export default function DesktopSidebar({ role: roleProp, city: cityProp }: { rol
     let ignore = false
     async function load() {
       try {
+        // загрузим сессию, если не пришла через пропсы
+        if (!roleProp || !cityProp) {
+          try {
+            const r = await fetch('/api/auth/session', { cache: 'no-store' })
+            if (!ignore && r.ok) {
+              const s = await r.json()
+              setUser((s?.user as any) || null)
+            }
+          } catch {}
+        }
         if (role === 'LOGOPED') {
           const res = await fetch('/api/me/leadership', { cache: 'no-store' })
           if (!ignore && res.ok) {
@@ -66,7 +76,7 @@ export default function DesktopSidebar({ role: roleProp, city: cityProp }: { rol
     }
     load()
     return () => { ignore = true }
-  }, [role])
+  }, [role, roleProp, cityProp])
 
   function togglePin() {
     const next = !pinned
@@ -184,14 +194,12 @@ export default function DesktopSidebar({ role: roleProp, city: cityProp }: { rol
           )}
           <div className="mb-3">
             <div className="grid gap-1">
-              {(plan !== 'free') && (
-                <div className="relative">
-                  <Item href="/chat" icon={<Icon name="max" />} label="Чат" collapsed={!pinned} />
-                  <div className="absolute top-1 right-2">
-                    <ChatUnreadBadge />
-                  </div>
+              <div className="relative">
+                <Item href="/chat" icon={<Icon name="max" />} label="Чат" collapsed={!pinned} />
+                <div className="absolute top-1 right-2">
+                  <ChatUnreadBadge />
                 </div>
-              )}
+              </div>
             </div>
           </div>
           {role === 'LOGOPED' && (

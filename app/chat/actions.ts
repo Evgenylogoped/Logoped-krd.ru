@@ -1,6 +1,4 @@
 "use server"
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
@@ -10,7 +8,23 @@ function ensure(session: { user?: unknown } | null): asserts session is { user: 
   if (!session || !('user' in session) || !session.user) throw new Error('Unauthorized')
 }
 
+async function getSessionSafe(): Promise<{ user?: { id?: string } } | null> {
+  try {
+    const na = 'next-auth' as const
+    const mod = await import(na as any).catch(() => null as any)
+    const auth = await import('@/lib/auth').catch(() => null as any)
+    const gss: any = mod?.getServerSession
+    const opts = auth?.authOptions
+    return (typeof gss === 'function' && opts) ? await gss(opts) : null
+  } catch { return null }
+}
+
 async function ensureChatAllowed(userId: string) {
+  // Родителям чат доступен всегда — вне зависимости от планов/квот
+  try {
+    const u = await (prisma as any).user.findUnique({ where: { id: userId }, select: { role: true } })
+    if ((u?.role as string | undefined) === 'PARENT') return
+  } catch {}
   const plan = await getUserPlan(userId)
   const limits = await getLimits(plan)
   const allowed = Boolean(limits.chat?.enabled)
@@ -24,7 +38,7 @@ async function ensureChatAllowed(userId: string) {
 // у которых уже есть хотя бы один детский диалог (title = child:<id>).
 // Ничего не трогает, если в общем диалоге есть хотя бы одно сообщение.
 export async function cleanupGenericEmptyDuplicates() {
-  const session = await getServerSession(authOptions)
+  const session = await getSessionSafe()
   ensure(session)
   const me = String((session!.user as { id?: string }).id || '')
   // Ищем все диалоги пользователя
@@ -45,7 +59,7 @@ export async function cleanupGenericEmptyDuplicates() {
     }
   }
   // К удалению: общий чат (без child), без сообщений, и для пары есть детский чат
-  const toDelete = convs.filter((c) => {
+  const toDelete = convs.filter((c: any) => {
     const isGeneric = !c.title || !String(c.title).startsWith('child:')
     if (!isGeneric) return false
     if ((c.messages || []).length > 0) return false
@@ -61,7 +75,7 @@ export async function cleanupGenericEmptyDuplicates() {
 }
 
 export async function reactMessage(messageId: string, reaction: string) {
-  const session = await getServerSession(authOptions)
+  const session = await getSessionSafe()
   ensure(session)
   const me = String((session!.user as { id?: string }).id || '')
   const msg = await prisma.message.findUnique({ where: { id: messageId } })
@@ -79,7 +93,7 @@ export async function reactMessage(messageId: string, reaction: string) {
 }
 
 export async function editMessage(messageId: string, body: string) {
-  const session = await getServerSession(authOptions)
+  const session = await getSessionSafe()
   ensure(session)
   const me = String((session!.user as { id?: string }).id || '')
   const msg = await prisma.message.findUnique({ where: { id: messageId } })
@@ -88,7 +102,7 @@ export async function editMessage(messageId: string, body: string) {
 }
 
 export async function deleteMessage(messageId: string) {
-  const session = await getServerSession(authOptions)
+  const session = await getSessionSafe()
   ensure(session)
   const me = String((session!.user as { id?: string }).id || '')
   const msg = await prisma.message.findUnique({ where: { id: messageId } })
@@ -97,7 +111,7 @@ export async function deleteMessage(messageId: string) {
 }
 
 export async function markReadOnFocus(conversationId: string) {
-  const session = await getServerSession(authOptions)
+  const session = await getSessionSafe()
   ensure(session)
   const me = String((session!.user as { id?: string }).id || '')
   await prisma.conversationParticipant.update({ where: { conversationId_userId: { conversationId, userId: me } }, data: { lastReadAt: new Date() } })
@@ -105,7 +119,7 @@ export async function markReadOnFocus(conversationId: string) {
 }
 
 export async function getOrCreateConversation(targetUserId: string, childId?: string) {
-  const session = await getServerSession(authOptions)
+  const session = await getSessionSafe()
   ensure(session)
   const me = String((session!.user as { id?: string }).id || '')
   await ensureChatAllowed(me)
@@ -142,7 +156,7 @@ export async function getOrCreateConversation(targetUserId: string, childId?: st
 }
 
 export async function listConversationsWithUnread() {
-  const session = await getServerSession(authOptions)
+  const session = await getSessionSafe()
   ensure(session)
   const me = String((session!.user as { id?: string }).id || '')
   const convs = await prisma.conversation.findMany({
@@ -153,7 +167,7 @@ export async function listConversationsWithUnread() {
       messages: { orderBy: { createdAt: 'desc' }, take: 1 },
     },
   })
-  return convs.map((c) => {
+  return convs.map((c: any) => {
     const meP = c.participants.find((p: { userId: string }) => p.userId === me)
     const lastOther = c.messages[0]?.createdAt ? new Date(c.messages[0].createdAt) : null
     const lr = meP?.lastReadAt ? new Date(meP.lastReadAt) : new Date(0)
@@ -163,7 +177,7 @@ export async function listConversationsWithUnread() {
 }
 
 export async function listMessages(conversationId: string, sinceTs?: number) {
-  const session = await getServerSession(authOptions)
+  const session = await getSessionSafe()
   ensure(session)
   const me = String((session!.user as { id?: string }).id || '')
   const conv = await prisma.conversation.findFirst({ where: { id: conversationId, participants: { some: { userId: me } } } })
@@ -174,7 +188,7 @@ export async function listMessages(conversationId: string, sinceTs?: number) {
 }
 
 export async function sendMessageAction(params: { conversationId?: string; targetUserId?: string; body: string; replyToId?: string | null; type?: string; attachmentUrl?: string | null }) {
-  const session = await getServerSession(authOptions)
+  const session = await getSessionSafe()
   ensure(session)
   const me = String((session!.user as { id?: string }).id || '')
   const { conversationId, targetUserId, body, replyToId, type, attachmentUrl } = params
@@ -227,7 +241,36 @@ export async function sendMessageAction(params: { conversationId?: string; targe
       } catch {}
     }
     if (!canPostFlag || banned) throw new Error('Отправка сообщений временно запрещена')
-    if (!allowedByPolicy) throw new Error('Отправка сообщений запрещена настройками группы')
+    if (!allowedByPolicy) {
+      // Fallback: если это родитель, перенаправим сообщение в персональный чат с логопедом/админом
+      try {
+        const u = await (prisma as any).user.findUnique({ where: { id: me }, select: { role: true } })
+        if ((u?.role as string | undefined) === 'PARENT') {
+          const targetUserId = (() => {
+            // приоритет: ADMIN участник группы → LOGOPED → любой другой кроме меня
+            const parts = (conv.participants || []) as any[]
+            const admin = parts.find(p => (p.userId !== me) && ((p.role || '').toUpperCase() === 'ADMIN'))
+            if (admin) return admin.userId
+            const log = parts.find(p => (p.userId !== me) && ((p.role || '').toUpperCase() === 'LOGOPED'))
+            if (log) return log.userId
+            const other = parts.find(p => p.userId !== me)
+            return other?.userId as string | undefined
+          })()
+          if (targetUserId) {
+            // найти/создать персональный диалог и переслать туда
+            let pconv = await prisma.conversation.findFirst({ where: { AND: [ { participants: { some: { userId: me } } }, { participants: { some: { userId: targetUserId } } } ] } })
+            if (!pconv) pconv = await prisma.conversation.create({ data: { participants: { create: [{ userId: me, role: 'MEMBER' }, { userId: targetUserId, role: 'MEMBER' }] } } })
+            await prisma.message.create({ data: { conversationId: pconv.id, authorId: me, body, replyToId: replyToId || null, type: type || 'TEXT', attachmentUrl: attachmentUrl || null } })
+            await prisma.conversation.update({ where: { id: pconv.id }, data: { updatedAt: new Date() } })
+            await prisma.conversationParticipant.update({ where: { conversationId_userId: { conversationId: pconv.id, userId: me } }, data: { lastReadAt: new Date() } })
+            revalidatePath('/chat')
+            revalidatePath(`/chat/${pconv.id}`)
+            return { rerouted: true, conversationId: pconv.id }
+          }
+        }
+      } catch {}
+      throw new Error('Отправка сообщений запрещена настройками группы')
+    }
     if (muted && (!params.type || params.type === 'TEXT')) throw new Error('Вы временно в режиме mute')
   }
   // cleanup >30 days
@@ -242,14 +285,14 @@ export async function sendMessageAction(params: { conversationId?: string; targe
 }
 
 export async function markRead(conversationId: string) {
-  const session = await getServerSession(authOptions)
+  const session = await getSessionSafe()
   ensure(session)
   const me = String((session!.user as { id?: string }).id || '')
   await prisma.conversationParticipant.update({ where: { conversationId_userId: { conversationId, userId: me } }, data: { lastReadAt: new Date() } })
 }
 
 export async function setTyping(conversationId: string, durationMs = 3000) {
-  const session = await getServerSession(authOptions)
+  const session = await getSessionSafe()
   ensure(session)
   const me = String((session!.user as { id?: string }).id || '')
   const until = new Date(Date.now() + Math.min(10000, Math.max(1000, Number(durationMs))))
@@ -258,7 +301,7 @@ export async function setTyping(conversationId: string, durationMs = 3000) {
 }
 
 export async function startChat(formData: FormData) {
-  const session = await getServerSession(authOptions)
+  const session = await getSessionSafe()
   ensure(session)
   const me = String((session!.user as { id?: string }).id || '')
   await ensureChatAllowed(me)

@@ -1,12 +1,11 @@
 "use client"
 import Link from "next/link"
-import { useSession } from "next-auth/react"
 import { useEffect, useState } from "react"
 import { usePathname } from "next/navigation"
 
 export default function MobileTabBar({ role: roleProp, leaderFlag: leaderFlagProp }: { role?: string, leaderFlag?: boolean } = {}) {
-  const { data } = useSession()
-  const role = (roleProp as any) ?? ((data?.user as any)?.role as string | undefined)
+  const [user, setUser] = useState<any>(null)
+  const role = (roleProp as any) ?? ((user as any)?.role as string | undefined)
   const R = (role || "").toUpperCase()
   const isParent = R === "PARENT"
   const isLogoped = R === "LOGOPED"
@@ -16,6 +15,17 @@ export default function MobileTabBar({ role: roleProp, leaderFlag: leaderFlagPro
   const [moreOpen, setMoreOpen] = useState(false)
   const pathname = usePathname()
   useEffect(() => setMounted(true), [])
+
+  // load session user if not provided via props
+  useEffect(() => {
+    let alive = true
+    if (roleProp) return
+    fetch('/api/auth/session', { cache: 'no-store' })
+      .then(r=> r.ok ? r.json() : null)
+      .then(s=> { if (alive) setUser((s?.user as any) || null) })
+      .catch(()=>{})
+    return ()=>{ alive=false }
+  }, [roleProp])
 
   useEffect(() => {
     let alive = true
