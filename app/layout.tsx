@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
 import { Inter, Roboto_Mono } from "next/font/google";
 import "./globals.css";
 // Auth/UI providers are imported dynamically when NEXTAUTH_SECRET is available
@@ -55,16 +57,7 @@ export default async function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  let s: any = null
-  try {
-    const na = 'next-auth' as const
-    const mod = await import(na as any).catch(() => null as any)
-    const auth = await import("@/lib/auth").catch(() => null as any)
-    if (mod?.getServerSession && auth?.authOptions) {
-      const session = await mod.getServerSession(auth.authOptions)
-      s = session as any
-    }
-  } catch {}
+  const s = await getServerSession(authOptions) as any
   const initialTheme = (s?.user?.theme as string | undefined) || 'default'
   const isAuthed = !!(s?.user as any)?.id
 
@@ -114,6 +107,7 @@ export default async function RootLayout({
         suppressHydrationWarning
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
         style={{ background: 'var(--background)', color: 'var(--foreground)' }}
+        data-user-role={(s?.user as any)?.role || ''}
       >
         {/* iOS zoom guard */}
         <script
