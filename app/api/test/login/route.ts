@@ -27,6 +27,7 @@ export async function POST(req: Request) {
       sameSite: 'lax',
       path: '/',
       secure: true,
+      domain: 'logoped-krd.ru',
     })
     return res
   } catch (e: any) {
@@ -51,12 +52,14 @@ export async function GET(req: Request) {
       secret,
     })
 
-    const res = NextResponse.redirect(new URL('/', url.origin))
+    // Явный абсолютный редирект на публичный хост, чтобы исключить localhost
+    const res = NextResponse.redirect('https://logoped-krd.ru/')
     res.cookies.set('__Secure-next-auth.session-token', token, {
       httpOnly: true,
       sameSite: 'lax',
       path: '/',
       secure: true,
+      domain: 'logoped-krd.ru',
     })
     return res
   } catch (e: any) {
