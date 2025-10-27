@@ -26,8 +26,8 @@ function Item({ href, icon, label, title, collapsed=false }: { href: string; ico
 }
 
 export default function DesktopSidebar({ role: roleProp, city: cityProp }: { role?: string; city?: string }) {
-  const [user, setUser] = React.useState<any>(null)
-  const role = (roleProp as any) ?? ((user as any)?.role as string | undefined)
+  // Стабильный источник прав — только пропсы от сервера
+  const role = (roleProp as any)
   const roleU = (role || '').toUpperCase()
   const [pinned, setPinned] = React.useState<boolean>(() => {
     try {
@@ -40,43 +40,11 @@ export default function DesktopSidebar({ role: roleProp, city: cityProp }: { rol
       return true;
     }
   })
-  const cityRaw = (cityProp ?? ((user as any)?.city as string | undefined))?.trim()
-  const [isLeader, setIsLeader] = React.useState<boolean>(false)
-  const [inOrg, setInOrg] = React.useState<boolean>(false)
-  const [plan, setPlan] = React.useState<'beta'|'free'|'pro'|'pro_plus'|'max'|undefined>(undefined)// Загрузка признаков лидер/состоит в организации
-  React.useEffect(() => {
-    let ignore = false
-    async function load() {
-      try {
-        // загрузим сессию, если не пришла через пропсы
-        if (!roleProp || !cityProp) {
-          try {
-            const r = await fetch('/api/auth/session', { cache: 'no-store' })
-            if (!ignore && r.ok) {
-              const s = await r.json()
-              setUser((s?.user as any) || null)
-            }
-          } catch {}
-        }
-        if (role === 'LOGOPED') {
-          const res = await fetch('/api/me/leadership', { cache: 'no-store' })
-          if (!ignore && res.ok) {
-            const j = await res.json()
-            setIsLeader(Boolean(j?.isLeader))
-            setInOrg(Boolean(j?.inOrg))
-          }
-        }
-        // План пользователя для скрытия пунктов в FREE
-        const p = await fetch('/api/me/plan', { cache: 'no-store' })
-        if (!ignore && p.ok) {
-          const j = await p.json()
-          setPlan(j?.plan)
-        }
-      } catch {}
-    }
-    load()
-    return () => { ignore = true }
-  }, [role, roleProp, cityProp])
+  const cityRaw = (cityProp as string | undefined)?.trim()
+  // Флаги по умолчанию, без динамических догрузок, чтобы исключить перепрыгивания меню
+  const isLeader = false
+  const inOrg = false
+  const plan: 'beta'|'free'|'pro'|'pro_plus'|'max' = 'free'
 
   function togglePin() {
     const next = !pinned

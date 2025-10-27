@@ -4,35 +4,19 @@ import { useEffect, useState } from "react"
 import { usePathname } from "next/navigation"
 
 export default function MobileTabBar({ role: roleProp, leaderFlag: leaderFlagProp }: { role?: string, leaderFlag?: boolean } = {}) {
-  const [user, setUser] = useState<any>(null)
-  const role = (roleProp as any) ?? ((user as any)?.role as string | undefined)
+  // Стабильный источник роли — только пропсы от сервера
+  const role = (roleProp as any)
   const R = (role || "").toUpperCase()
   const isParent = R === "PARENT"
   const isLogoped = R === "LOGOPED"
   const roleLeader = ["ADMIN","ACCOUNTANT","SUPER_ADMIN","SUPERVISOR","OWNER","LEADER","MANAGER","ORGANIZER"].includes(R)
   const [mounted, setMounted] = useState(false)
-  const [leaderFlag, setLeaderFlag] = useState<boolean | null>(leaderFlagProp ?? null)
+  const [leaderFlag] = useState<boolean | null>(leaderFlagProp ?? null)
   const [moreOpen, setMoreOpen] = useState(false)
   const pathname = usePathname()
   useEffect(() => setMounted(true), [])
 
-  // load session user if not provided via props
-  useEffect(() => {
-    let alive = true
-    if (roleProp) return
-    fetch('/api/auth/session', { cache: 'no-store' })
-      .then(r=> r.ok ? r.json() : null)
-      .then(s=> { if (alive) setUser((s?.user as any) || null) })
-      .catch(()=>{})
-    return ()=>{ alive=false }
-  }, [roleProp])
-
-  useEffect(() => {
-    let alive = true
-    if (!mounted) return
-    fetch("/api/me/leader-flags").then(r=>r.json()).then(j=>{ if(alive) setLeaderFlag(Boolean(j?.isLeader)) }).catch(()=>{})
-    return ()=>{ alive=false }
-  }, [mounted])
+  // без дополнительных запросов — чтобы исключить перепрыгивания UI
     if (!mounted) return null
 
   const showLeader = (leaderFlag === true) || (leaderFlag === null && roleLeader && !isLogoped && !isParent)
