@@ -26,8 +26,20 @@ function Item({ href, icon, label, title, collapsed=false }: { href: string; ico
 }
 
 export default function DesktopSidebar({ role: roleProp, city: cityProp }: { role?: string; city?: string }) {
-  // Стабильный источник прав — только пропсы от сервера
-  const role = (roleProp as any)
+  // Стабильный источник прав — пропсы от сервера; если нет, подстрахуемся клиентским фетчем
+  const [roleState, setRoleState] = React.useState<string | undefined>(typeof roleProp === 'string' ? roleProp : undefined)
+  React.useEffect(() => {
+    if (!roleProp && typeof window !== 'undefined') {
+      fetch('/api/auth/session')
+        .then(r => r.ok ? r.json() : null)
+        .then(d => {
+          const r = d?.user?.role
+          if (typeof r === 'string' && !roleState) setRoleState(r)
+        })
+        .catch(() => {})
+    }
+  }, [roleProp, roleState])
+  const role = (roleProp ?? roleState) as any
   const roleU = (role || '').toUpperCase()
   const [pinned, setPinned] = React.useState<boolean>(() => {
     try {

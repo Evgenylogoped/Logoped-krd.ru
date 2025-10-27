@@ -4,8 +4,20 @@ import { useEffect, useState } from "react"
 import { usePathname } from "next/navigation"
 
 export default function MobileTabBar({ role: roleProp, leaderFlag: leaderFlagProp }: { role?: string, leaderFlag?: boolean } = {}) {
-  // Стабильный источник роли — только пропсы от сервера
-  const role = (roleProp as any)
+  // Стабильный источник роли — пропсы от сервера; при отсутствии подстраховываемся фетчем
+  const [roleState, setRoleState] = useState<string | undefined>(typeof roleProp === 'string' ? roleProp : undefined)
+  useEffect(() => {
+    if (!roleProp) {
+      fetch('/api/auth/session')
+        .then(r => r.ok ? r.json() : null)
+        .then(d => {
+          const r = d?.user?.role
+          if (typeof r === 'string' && !roleState) setRoleState(r)
+        })
+        .catch(() => {})
+    }
+  }, [roleProp, roleState])
+  const role = (roleProp ?? roleState) as any
   const R = (role || "").toUpperCase()
   const isParent = R === "PARENT"
   const isLogoped = R === "LOGOPED"
