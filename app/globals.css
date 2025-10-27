@@ -663,5 +663,5 @@ header nav [title="Быстрый переключатель темы"],
 header nav select[title="Тема интерфейса"],
 header nav a[href="/settings/password"] { display: none !important; }
 /* Hide Export links/buttons across app */
-.container a[href*=/export], a[href*=/export], a[href*=export], a[download][href$=.csv], button[data-action=export] { display: none !important; }
+.container a[href*="/export"], a[href*="/export"], a[href*="export"], a[download][href$=".csv"], button[data-action="export"] { display: none !important; }
 
