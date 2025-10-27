@@ -11,7 +11,8 @@ FROM node:${NODE_VERSION} AS builder
 WORKDIR /app
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
-    PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1
+    PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1 \
+    NEXTAUTH_SECRET=dummy-build-secret
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npx prisma generate
