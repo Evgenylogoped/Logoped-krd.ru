@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+export const runtime = 'nodejs'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
@@ -28,9 +29,15 @@ export async function POST(req: NextRequest) {
   const cutoff = new Date(Date.now() - 30*24*60*60*1000)
   await (prisma as any).message.deleteMany({ where: { conversationId: conv.id, createdAt: { lt: cutoff } } })
 
-  const msg = await (prisma as any).message.create({ data: { conversationId: conv.id, authorId: userId, body: String(body), replyToId: replyToId || null } })
-  await (prisma as any).conversation.update({ where: { id: conv.id }, data: { updatedAt: new Date() } })
-  // mark my lastReadAt
-  await (prisma as any).conversationParticipant.update({ where: { conversationId_userId: { conversationId: conv.id, userId } }, data: { lastReadAt: new Date() } })
-  return NextResponse.json({ ok: true, message: msg })
+  try {
+    const msg = await (prisma as any).message.create({ data: { conversationId: conv.id, authorId: userId, body: String(body), replyToId: replyToId || null } })
+    await (prisma as any).conversation.update({ where: { id: conv.id }, data: { updatedAt: new Date() } })
+    // mark my lastReadAt (best-effort)
+    try { await (prisma as any).conversationParticipant.update({ where: { conversationId_userId: { conversationId: conv.id, userId } }, data: { lastReadAt: new Date() } }) } catch {}
+    try { await prisma.auditLog.create({ data: { action: 'CHAT_SEND_API', payload: JSON.stringify({ conversationId: conv.id, userId, len: String(body||'').length }) , actorId: userId } }) } catch {}
+    return NextResponse.json({ ok: true, message: msg })
+  } catch (e: any) {
+    try { await prisma.auditLog.create({ data: { action: 'CHAT_SEND_API_ERR', payload: String(e?.message||e||'error') , actorId: userId } }) } catch {}
+    return new NextResponse('Internal Server Error', { status: 500 })
+  }
 }
