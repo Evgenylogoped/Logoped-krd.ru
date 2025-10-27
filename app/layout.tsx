@@ -57,60 +57,18 @@ export default async function RootLayout({
 }>) {
   let s: any = null
   try {
-    if (process.env.NEXTAUTH_SECRET) {
-      const na = 'next-auth' as const
-      const mod = await import(na as any).catch(() => null as any)
-      const auth = await import("@/lib/auth").catch(() => null as any)
-      if (mod?.getServerSession && auth?.authOptions) {
-        const session = await mod.getServerSession(auth.authOptions)
-        s = session as any
-      }
+    const na = 'next-auth' as const
+    const mod = await import(na as any).catch(() => null as any)
+    const auth = await import("@/lib/auth").catch(() => null as any)
+    if (mod?.getServerSession && auth?.authOptions) {
+      const session = await mod.getServerSession(auth.authOptions)
+      s = session as any
     }
   } catch {}
   const initialTheme = (s?.user?.theme as string | undefined) || 'default'
   const isAuthed = !!(s?.user as any)?.id
 
-  // If NEXTAUTH_SECRET is not set during build, render minimal layout without importing next-auth dependent modules
-  if (!process.env.NEXTAUTH_SECRET) {
-    return (
-      <html lang="ru" suppressHydrationWarning data-theme={initialTheme}>
-        <head>
-          <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-          <meta name="color-scheme" content="light" />
-          {/* iOS PWA fullscreen */}
-          <meta name="apple-mobile-web-app-capable" content="yes" />
-          <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-          <meta name="apple-mobile-web-app-title" content="My Logoped" />
-          <link rel="manifest" href="/manifest.json" />
-          <link rel="icon" href="/icons/favicon.svg" type="image/svg+xml" />
-          <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
-          <link rel="icon" type="image/png" sizes="16x16" href="/icons/favicon-16.png" />
-          <link rel="apple-touch-icon" href="/icons/apple-touch-icon-180.png" />
-          <link rel="mask-icon" href="/icons/safari-pinned-tab.svg" color="#4f46e5" />
-          {/* Open Graph / Twitter */}
-          <meta property="og:title" content="My Logoped" />
-          <meta property="og:description" content="My Logoped — расписание, записи, абонементы, чаты и выплаты — всё в одном удобном приложении." />
-          <meta property="og:type" content="website" />
-          <meta property="og:image" content="/og.png" />
-          <meta property="og:site_name" content="My Logoped" />
-          <meta property="og:url" content="https://logoped-krd.ru" />
-          <meta property="og:image:width" content="1200" />
-          <meta property="og:image:height" content="630" />
-          <meta name="twitter:card" content="summary_large_image" />
-          <meta name="twitter:title" content="My Logoped" />
-          <meta name="twitter:description" content="My Logoped — расписание, записи, абонементы, чаты и выплаты — всё в одном удобном приложении." />
-          <meta name="twitter:image" content="/og.png" />
-        </head>
-        <body
-          suppressHydrationWarning
-          className={`${geistSans.variable} ${geistMono.variable} antialiased`}
-          style={{ background: 'var(--background)', color: 'var(--foreground)' }}
-        >
-          {children}
-        </body>
-      </html>
-    )
-  }
+  // Always render full layout; we already guarded dynamic next-auth imports with try/catch above
 
   // NEXTAUTH_SECRET is present: import full UI stack lazily to avoid build-time module evaluation
   const [AuthProvider, NavBar, MobileTabBar, PWARegister, PrefetchImportant, DesktopSidebar, MobileAutoRedirect] = await Promise.all([
