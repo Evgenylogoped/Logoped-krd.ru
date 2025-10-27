@@ -52,8 +52,9 @@ export async function GET(req: Request) {
       secret,
     })
 
-    // Явный абсолютный редирект на публичный хост, чтобы исключить localhost
-    const res = NextResponse.redirect('https://logoped-krd.ru/')
+    // Возвращаем HTML (200 OK) без заголовка Location; редирект делаем на клиенте.
+    const html = `<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>Auth</title></head><body><script>try{window.location.replace('/')}catch(e){window.location.href='/'}</script>OK</body></html>`
+    const res = new NextResponse(html, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } })
     res.cookies.set('__Secure-next-auth.session-token', token, {
       httpOnly: true,
       sameSite: 'lax',
