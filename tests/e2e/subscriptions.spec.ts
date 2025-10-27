@@ -83,8 +83,7 @@ test.describe('Subscriptions smoke', () => {
       await page.locator(`input[name="${p}_year"]`).fill('3000000000')
     }
     await page.getByRole('button', { name: 'Сохранить цены' }).click()
-    // wait for clamp to reflect after server action and bust cache
-    await page.waitForLoadState('networkidle')
+    // Network idle is flaky with Next.js server actions; rely on short delay then bust cache below
     await page.waitForTimeout(200)
     await page.goto(`/admin/subscriptions?ts=${Date.now()}`)
     for (const p of pricePlans) {

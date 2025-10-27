@@ -1,6 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  swcMinify: false,
+  outputFileTracingRoot: __dirname,
   experimental: { optimizeCss: false },
   eslint: { ignoreDuringBuilds: true },
   typescript: { ignoreBuildErrors: true },

@@ -84,7 +84,8 @@ test.describe('Subscriptions full flows', () => {
     const confirmBtn = row.getByRole('button', { name: /Подтверд/i })
     await confirmBtn.waitFor({ state: 'visible' })
     await confirmBtn.click()
-    await page.waitForLoadState('networkidle')
+    // Network idle is flaky with Next.js server actions; tests below poll API explicitly
+    await page.waitForTimeout(200)
     // Подождём, пока заявка лимитов получит статус approved через API
     await programmaticLogin(page, USER_EMAIL)
     for (let i = 0; i < 20; i++) {

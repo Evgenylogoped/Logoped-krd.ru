@@ -98,7 +98,7 @@ test.describe('Admin org-requests', () => {
     await expect(page.getByText('Заявка одобрена')).toBeVisible()
     // And organization settings show company and 'Основной офис'
     await page.goto('/settings/organization')
-    await expect(page.getByText(`Организация:`)).toBeVisible()
+    await expect(page.locator('main').getByText('Организация:')).toBeVisible()
     await expect(page.getByText('Основной офис')).toBeVisible()
   })
 
