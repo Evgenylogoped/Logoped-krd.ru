@@ -1,11 +1,14 @@
 import { NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { ensureLogopedGroup } from '@/app/chat/chatService'
 
 export async function GET() {
-  const session = await getServerSession(authOptions)
+  const na = 'next-auth' as const
+  const mod = await import(na as any).catch(() => null as any)
+  const auth = await import('@/lib/auth').catch(() => null as any)
+  const getServerSession: any = mod?.getServerSession
+  const authOptions = auth?.authOptions
+  const session = (typeof getServerSession === 'function' && authOptions) ? await getServerSession(authOptions) : null
   if (!session?.user) return new NextResponse('Unauthorized', { status: 401 })
   const role = (session.user as any).role as string
   // Allow even in production environment for local setup
@@ -18,7 +21,7 @@ export async function GET() {
       await (prisma as any).user.create({ data: { id: logopedId, email: `restored+${logopedId}@local.test`, passwordHash: 'dev', role: 'LOGOPED', name: 'Логопед' } })
     }
     // ensure demo parent user
-    const parentEmail = 'parent@novikovdom.test'
+    const parentEmail = 'parent@mylogoped.test'
     let parentUser = await (prisma as any).user.findUnique({ where: { email: parentEmail } })
     if (!parentUser) {
       parentUser = await (prisma as any).user.create({ data: { email: parentEmail, passwordHash: 'dev', role: 'PARENT', name: 'Родитель' } })

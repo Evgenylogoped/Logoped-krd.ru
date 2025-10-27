@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 
 export async function POST(req: NextRequest) {
-  const session = await getServerSession(authOptions)
+  const na = 'next-auth' as const
+  const mod = await import(na as any).catch(() => null as any)
+  const auth = await import('@/lib/auth').catch(() => null as any)
+  const getServerSession: any = mod?.getServerSession
+  const authOptions = auth?.authOptions
+  const session = (typeof getServerSession === 'function' && authOptions) ? await getServerSession(authOptions) : null
   const role = (session?.user as any)?.role as string | undefined
   const adminId = (session?.user as any)?.id as string | undefined
   if (!session) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })

@@ -16,9 +16,8 @@ jobs:
     services:
       postgres:
         image: postgres:15-alpine
-        # Порты наружу не пробрасываем — обращаемся по имени сервиса 'postgres'
-        # ports:
-        #   - 5432:5432
+        ports:
+          - 5432:5432
         env:
           POSTGRES_USER: app
           POSTGRES_PASSWORD: app
@@ -30,7 +29,7 @@ jobs:
       NEXTAUTH_URL: http://localhost:3000
       NEXTAUTH_SECRET: e2e-e2e-secret
       ENABLE_TEST_LOGIN: '1'
-      DATABASE_URL: postgresql://app:app@postgres:5432/logoped?schema=public
+      DATABASE_URL: postgresql://app:app@127.0.0.1:5432/logoped?schema=public
       CI: 'true'
 
     steps:
@@ -47,17 +46,29 @@ jobs:
         run: npm ci
 
       - name: Generate Prisma Client
-        run: npx prisma generate
-
-      - name: Wait for Postgres
         run: |
-          for i in {1..60}; do
-            if npx prisma db pull >/dev/null 2>&1; then echo "DB ready"; break; fi
-            echo "waiting for DB..."; sleep 2;
+          echo "DATABASE_URL=$DATABASE_URL"
+          DATABASE_URL="$DATABASE_URL" npx prisma generate
+
+      - name: Wait for Postgres (robust)
+        run: |
+          ATTEMPTS=100
+          SLEEP=3
+          for i in $(seq 1 $ATTEMPTS); do
+            if pg_isready -h 127.0.0.1 -U app -d logoped >/dev/null 2>&1; then echo "pg_isready OK"; fi
+            if DATABASE_URL="$DATABASE_URL" npx prisma db pull >/dev/null 2>&1; then echo "DB ready"; break; fi
+            echo "waiting for DB ($i/$ATTEMPTS)..."; sleep $SLEEP;
           done
 
-      - name: Run DB migrations
-        run: npx prisma migrate deploy
+      - name: Run DB migrations (retry)
+        run: |
+          ATTEMPTS=10
+          SLEEP=3
+          for i in $(seq 1 $ATTEMPTS); do
+            if DATABASE_URL="$DATABASE_URL" npx prisma migrate deploy; then exit 0; fi
+            echo "migrate deploy retry ($i/$ATTEMPTS)..."; sleep $SLEEP;
+          done
+          echo "migrate deploy failed after retries"; exit 1
 
       - name: Seed E2E data
         run: |

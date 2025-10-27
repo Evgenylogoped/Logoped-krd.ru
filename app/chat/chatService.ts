@@ -1,5 +1,4 @@
 import { prisma } from '@/lib/prisma'
-import type { Prisma } from '@prisma/client'
 
 // Types for unified conversation and connection views
 export type UnifiedConversation = {
@@ -62,7 +61,7 @@ export async function listUnifiedConversations(me: string): Promise<UnifiedConve
     },
   })
   // group by participant pair
-  const pairKey = (c: { participants: { userId: string }[] }) => c.participants.map((p) => p.userId).sort().join(':')
+  const pairKey = (c: { participants: { userId: string }[] }) => c.participants.map((p: any) => p.userId).sort().join(':')
   const grouped = new Map<string, (typeof convs)[number][]>()
   for (const c of convs) {
     const k = pairKey(c)
@@ -71,23 +70,23 @@ export async function listUnifiedConversations(me: string): Promise<UnifiedConve
   }
   const dedup: (typeof convs)[number][] = []
   for (const arr of grouped.values()) {
-    const childConvs = arr.filter((x)=> isChildTitle(x.title))
+    const childConvs = arr.filter((x: any)=> isChildTitle(x.title))
     if (childConvs.length > 0) {
       dedup.push(...childConvs)
     } else {
       // Оставляем только один общий диалог — самый свежий по updatedAt
-      const latest = arr.slice().sort((a,b)=> new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0]
+      const latest = arr.slice().sort((a: any,b: any)=> new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0]
       if (latest) dedup.push(latest)
     }
   }
   // build child map
-  const childIds = Array.from(new Set(dedup.map((c)=> childIdFromTitle(c.title)).filter(Boolean))) as string[]
+  const childIds = Array.from(new Set(dedup.map((c: any)=> childIdFromTitle(c.title)).filter(Boolean))) as string[]
   const children = childIds.length>0 ? await prisma.child.findMany({ where: { id: { in: childIds } }, select: { id: true, firstName: true, lastName: true, photoUrl: true } }) : []
-  const childById = new Map<string, { id: string; firstName: string | null; lastName: string | null; photoUrl: string | null }>(children.map((c)=> [c.id, c]))
+  const childById = new Map<string, { id: string; firstName: string | null; lastName: string | null; photoUrl: string | null }>(children.map((c: any)=> [c.id, c]))
 
   const out: UnifiedConversation[] = []
   for (const c of dedup) {
-    const other = c.participants.find((p)=> p.userId !== me)?.user
+    const other = c.participants.find((p: any)=> p.userId !== me)?.user
     const unread = await countUnreadFor(me, c.id)
     const cid = childIdFromTitle(c.title)
     const kid = cid ? childById.get(cid) : null
@@ -136,11 +135,11 @@ export async function ensureLogopedGroup(logopedUserId: string) {
   for (const uid of have) if (uid !== logopedUserId && !required.has(uid)) removed.push(uid)
   const shortName = (u: { name?: string | null; email?: string | null } | null | undefined)=> (u?.name || u?.email || 'участник')
   for (const uid of added) {
-    const u = (after?.participants||[]).find((p)=>p.userId===uid)?.user || null
+    const u = (after?.participants||[]).find((p: any)=>p.userId===uid)?.user || null
     await prisma.message.create({ data: { conversationId: conv.id, authorId: logopedUserId, type: 'SYSTEM', body: `Добавлен участник: ${shortName(u)}` } })
   }
   for (const uid of removed) {
-    const uName = shortName((conv.participants||[]).find((p)=>p.userId===uid)?.user as { name?: string | null; email?: string | null } | null | undefined)
+    const uName = shortName((conv.participants||[]).find((p: any)=>p.userId===uid)?.user as { name?: string | null; email?: string | null } | null | undefined)
     await prisma.message.create({ data: { conversationId: conv.id, authorId: logopedUserId, type: 'SYSTEM', body: `Исключён участник: ${uName}` } })
   }
   return conv.id as string
@@ -188,12 +187,12 @@ export async function listConnections(
   }
   if (role === 'PARENT') {
     const parent = await prisma.parent.findUnique({ where: { userId: me }, include: { children: { include: { logoped: true } } } })
-    const childIds = (parent?.children || []).map((c)=>c.id)
+    const childIds = (parent?.children || []).map((c: any)=>c.id)
     const kids = childIds.length>0 ? await prisma.child.findMany({ where: { id: { in: childIds } }, select: { id:true, firstName:true, lastName:true, photoUrl:true, logopedId:true } }) : []
     const items: ConnectionItem[] = []
     for (const k of kids) {
       if (!k.logopedId) continue
-      const log = (parent!.children.find((c)=>c.id===k.id))?.logoped
+      const log = (parent!.children.find((c: any)=>c.id===k.id))?.logoped
       const conv = await getOrCreateConversation(me, k.logopedId, k.id)
       const unread = await countUnreadFor(me, conv.id)
       items.push({ key: `${k.logopedId}:${k.id}`, href: `/chat/${conv.id}`, title: `${k.lastName} ${k.firstName}`.trim(), subtitle: log?.name || log?.email, image: k.photoUrl || '/avatar-child.svg', unread, featured: (log as { featured?: boolean | null } | null | undefined)?.featured ?? false, featuredSuper: (log as { featuredSuper?: boolean | null } | null | undefined)?.featuredSuper ?? false, role: log?.role })
@@ -201,7 +200,7 @@ export async function listConnections(
     addGroup('Логопеды детей', items)
     // Добавим групповую беседу(ы) логопедов
     try {
-      const logIds = Array.from(new Set((kids || []).map((k)=> k.logopedId).filter(Boolean))) as string[]
+      const logIds = Array.from(new Set((kids || []).map((k: any)=> k.logopedId).filter(Boolean))) as string[]
       const groupItems: ConnectionItem[] = []
       for (const lid of logIds) {
         try { await ensureLogopedGroup(lid) } catch {}
@@ -227,7 +226,7 @@ export async function listConnections(
     const isAdminRoleLocal = (r?: string|null) => r === 'ADMIN' || r === 'SUPER_ADMIN' || r === 'ACCOUNTANT'
     if (bm && bm.id !== me && !isAdminRoleLocal(bm.role)) {
       const conv = await getOrCreateConversation(me, bm.id)
-      addGroup('Руководители', [ { key: `sup:${bm.id}`, href: `/chat/${conv.id}` , title: bm.name || bm.email, subtitle: 'Руководитель филиала', image: bm.image, unread: await countUnreadFor(me, conv.id), role: bm.role, featured: (bm as { featured?: boolean | null })?.featured ?? false, featuredSuper: (bm as { featuredSuper?: boolean | null })?.featuredSuper ?? false } ])
+      addGroup('Руководители', [ { key: `sup:${bm.id}`, href: `/chat/${conv.id}` , title: String(bm.name || bm.email || ''), subtitle: 'Руководитель филиала', image: bm.image, unread: await countUnreadFor(me, conv.id), role: bm.role, featured: (bm as { featured?: boolean | null })?.featured ?? false, featuredSuper: (bm as { featuredSuper?: boolean | null })?.featuredSuper ?? false } ])
     }
   }
   // Админские глобальные списки по фильтру
@@ -236,7 +235,7 @@ export async function listConnections(
     const perPage = Math.max(1, Math.min(100, Number(opts?.pagination?.perPage) || 10))
     const { q, city, orgId } = opts.search || {}
     if (opts.adminFilter === 'logopeds') {
-      const where: Prisma.UserWhereInput = { role: 'LOGOPED', id: { not: me } }
+      const where: any = { role: 'LOGOPED', id: { not: me } }
       if (q && q.trim()) {
         where.OR = [
           { name: { contains: q, mode: 'insensitive' } },
@@ -249,7 +248,7 @@ export async function listConnections(
       const items: ConnectionItem[] = []
       for (const u of logs) {
         const conv = await getOrCreateConversation(me, u.id)
-        items.push({ key: `log:${u.id}`, href: `/chat/${conv.id}`, title: u.name || u.email, subtitle: 'Логопед', image: u.image, unread: await countUnreadFor(me, conv.id), role: u.role, featured: (u as { featured?: boolean | null })?.featured ?? false, featuredSuper: (u as { featuredSuper?: boolean | null })?.featuredSuper ?? false })
+        items.push({ key: `log:${u.id}`, href: `/chat/${conv.id}`, title: String(u.name || u.email || ''), subtitle: 'Логопед', image: u.image, unread: await countUnreadFor(me, conv.id), role: u.role, featured: (u as { featured?: boolean | null })?.featured ?? false, featuredSuper: (u as { featuredSuper?: boolean | null })?.featuredSuper ?? false })
       }
       addGroup('Логопеды', items)
     } else if (opts.adminFilter === 'managers') {
@@ -276,7 +275,7 @@ export async function listConnections(
       const items: ConnectionItem[] = []
       for (const u of slice) {
         const conv = await getOrCreateConversation(me, u.id)
-        items.push({ key: `mgr:${u.id}`, href: `/chat/${conv.id}`, title: u.name || u.email, subtitle: 'Руководитель филиала', image: u.image, unread: await countUnreadFor(me, conv.id), role: u.role, featured: false, featuredSuper: false })
+        items.push({ key: `mgr:${u.id}`, href: `/chat/${conv.id}`, title: String(u.name || u.email || ''), subtitle: 'Руководитель филиала', image: u.image, unread: await countUnreadFor(me, conv.id), role: u.role, featured: false, featuredSuper: false })
       }
       addGroup('Руководители филиалов', items)
     }
@@ -338,9 +337,9 @@ export async function listConnections(
       // Skip demo accountant user to avoid duplicate admin chats in UI
       const email = u?.email as string | undefined
       const name = u?.name as string | undefined
-      if (email === 'accountant@novikovdom.test' || name === 'ACCOUNTANT') continue
+      if (email === 'accountant@mylogoped.test' || name === 'ACCOUNTANT') continue
       const conv = await getOrCreateConversation(me, u.id)
-      items.push({ key: `admin:${u.id}`, href: `/chat/${conv.id}`, title: u.name || u.email, subtitle: roleLabel(u.role), image: u.image, unread: await countUnreadFor(me, conv.id), role: u.role, featured: (u as { featured?: boolean | null })?.featured ?? false, featuredSuper: (u as { featuredSuper?: boolean | null })?.featuredSuper ?? false })
+      items.push({ key: `admin:${u.id}`, href: `/chat/${conv.id}`, title: String(u.name || u.email || ''), subtitle: roleLabel(u.role), image: u.image, unread: await countUnreadFor(me, conv.id), role: u.role, featured: (u as { featured?: boolean | null })?.featured ?? false, featuredSuper: (u as { featuredSuper?: boolean | null })?.featuredSuper ?? false })
     }
     addGroup('Администраторы и бухгалтерия', items)
   }

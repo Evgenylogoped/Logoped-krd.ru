@@ -1,17 +1,19 @@
 "use client";
 import Link from "next/link";
 import Image from "next/image";
-import { useSession } from "next-auth/react";
 import { useEffect, useState } from "react";
 
 export default function MarketingHeader() {
-  const { data } = useSession();
-  const user = (data?.user as any) || null;
+  const [user, setUser] = useState<any>(null);
   const name = user?.name || user?.email || "Гость";
   const image = user?.image as string | undefined;
   const [elevated, setElevated] = useState(false);
 
   useEffect(() => {
+    let mounted = true
+    fetch('/api/auth/session').then(r=> r.ok ? r.json() : null).then((s)=>{
+      if (mounted) setUser((s?.user as any) || null)
+    }).catch(()=>{})
     const onScroll = () => setElevated(window.scrollY > 2);
     onScroll();
     window.addEventListener('scroll', onScroll, { passive: true });

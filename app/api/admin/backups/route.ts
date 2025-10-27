@@ -1,6 +1,4 @@
 import { NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth'
 import { exec } from 'node:child_process'
 import { promisify } from 'node:util'
 import { promises as fs } from 'node:fs'
@@ -11,7 +9,12 @@ const LOG = '/tmp/backup_etalon.log'
 const LOCK = '/tmp/backup_etalon.lock'
 
 async function ensureSuperAdmin() {
-  const session = await getServerSession(authOptions)
+  const na = 'next-auth' as const
+  const mod = await import(na as any).catch(() => null as any)
+  const auth = await import('@/lib/auth').catch(() => null as any)
+  const getServerSession: any = mod?.getServerSession
+  const authOptions = auth?.authOptions
+  const session = (typeof getServerSession === 'function' && authOptions) ? await getServerSession(authOptions) : null
   const role = (session?.user as any)?.role as string | undefined
   if (!session || role !== 'SUPER_ADMIN') return null
   return session

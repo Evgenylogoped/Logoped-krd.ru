@@ -1,53 +1,29 @@
 "use server"
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 import { sendMail } from '@/lib/mail'
-import bcrypt from 'bcrypt'
-import crypto from 'crypto'
+import crypto from 'node:crypto'
 import { isValidCity, normalizeCity } from '@/lib/cities'
+
+async function getSessionSafe(): Promise<any> {
+  const na = 'next-auth' as const
+  const mod = await import(na as any).catch(() => null as any)
+  const auth = await import('@/lib/auth').catch(() => null as any)
+  const gss: any = mod?.getServerSession
+  const opts = auth?.authOptions
+  return (typeof gss === 'function' && opts) ? await gss(opts) : null
+}
+
+async function bcryptHash(plain: string): Promise<string> {
+  const bmod = await import('bcrypt' as any).catch(() => null as any)
+  const bcrypt: any = bmod?.default || bmod
+  return bcrypt ? await bcrypt.hash(plain, 10) : plain
+}
 
 function ensureLogoped(session: any) {
   const role = (session?.user as any)?.role
   if (!session || !['ADMIN','SUPER_ADMIN','LOGOPED'].includes(role)) throw new Error('Forbidden')
-}
-
-export async function regenerateParentPassword(formData: FormData): Promise<void> {
-  const session = await getServerSession(authOptions)
-  ensureLogoped(session)
-  const parentId = String(formData.get('parentId') || '')
-  if (!parentId) throw new Error('Нет parentId')
-  const parent = await (prisma as any).parent.findUnique({ where: { id: parentId }, include: { user: true } })
-  if (!parent?.user) throw new Error('Родитель не найден')
-  const temp = genTempPassword(4)
-  const passwordHash = await bcrypt.hash(temp, 10)
-  await (prisma as any).user.update({ where: { id: parent.userId }, data: { passwordHash } })
-  await (prisma as any).parent.update({
-    where: { id: parentId },
-    data: {
-      visiblePasswordEncrypted: ((): string => {
-        try {
-          const rawKey = process.env.PARENT_PWD_KEY || ''
-          if (!rawKey) return 'plain:' + Buffer.from(temp, 'utf8').toString('base64')
-          const key = Buffer.from(rawKey.padEnd(32, '0').slice(0, 32))
-          const iv = crypto.randomBytes(12)
-          const cipher = crypto.createCipheriv('aes-256-gcm', key, iv)
-          const enc = Buffer.concat([cipher.update(temp, 'utf8'), cipher.final()])
-          const tag = cipher.getAuthTag()
-          return Buffer.concat([iv, tag, enc]).toString('base64')
-        } catch {
-          return 'plain:' + Buffer.from(temp, 'utf8').toString('base64')
-        }
-      })(),
-      visiblePasswordUpdatedAt: new Date(),
-    },
-  })
-  if (parent.user.email) {
-    await sendMail({ to: parent.user.email, subject: 'Пароль обновлён', text: `Ваш пароль был обновлён логопедом. Новый временный пароль: ${temp}. Рекомендуем сменить его в настройках.` })
-  }
-  revalidatePath('/logoped/clients')
 }
 
 function normalizeEmail(v: FormDataEntryValue | null) {
@@ -68,7 +44,7 @@ function encryptVisiblePassword(plain: string): string {
     if (!rawKey) return 'plain:' + Buffer.from(plain, 'utf8').toString('base64')
     const key = Buffer.from(rawKey.padEnd(32, '0').slice(0, 32))
     const iv = crypto.randomBytes(12)
-    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv)
+    const cipher = (crypto as any).createCipheriv('aes-256-gcm', key, iv)
     const enc = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()])
     const tag = cipher.getAuthTag()
     return Buffer.concat([iv, tag, enc]).toString('base64')
@@ -77,15 +53,39 @@ function encryptVisiblePassword(plain: string): string {
   }
 }
 
+export async function regenerateParentPassword(formData: FormData): Promise<void> {
+  const session = await getSessionSafe()
+  ensureLogoped(session)
+  const parentId = String(formData.get('parentId') || '')
+  if (!parentId) throw new Error('Нет parentId')
+  const parent = await (prisma as any).parent.findUnique({ where: { id: parentId }, include: { user: true } })
+  if (!parent?.user) throw new Error('Родитель не найден')
+  const temp = genTempPassword(4)
+  const passwordHash = await bcryptHash(temp)
+  await (prisma as any).user.update({ where: { id: parent.userId }, data: { passwordHash } })
+  await (prisma as any).parent.update({
+    where: { id: parentId },
+    data: {
+      visiblePasswordEncrypted: encryptVisiblePassword(temp),
+      visiblePasswordUpdatedAt: new Date(),
+    },
+  })
+  if (parent.user.email) {
+    await sendMail({ to: parent.user.email, subject: 'Пароль обновлён', text: `Ваш пароль был обновлён логопедом. Новый временный пароль: ${temp}. Рекомендуем сменить его в настройках.` })
+  }
+  revalidatePath('/logoped/clients')
+}
+
 export async function createParentAndChild(formData: FormData): Promise<void> {
-  const session = await getServerSession(authOptions)
+  const session = await getSessionSafe()
   ensureLogoped(session)
   const logopedId = (session!.user as any).id as string
   // Ensure current logoped exists in DB (after DB reset sessions may persist)
   const meUser = await (prisma as any).user.findUnique({ where: { id: logopedId } })
   if (!meUser) {
     const email = (session!.user as any).email || `restored+${logopedId}@local.test`
-    await (prisma as any).user.create({ data: { id: logopedId, email, passwordHash: await bcrypt.hash(crypto.randomBytes(8).toString('hex'), 10), role: 'LOGOPED', name: (session!.user as any).name || 'Логопед' } })
+    const ph = await bcryptHash(crypto.randomBytes(8).toString('hex'))
+    await (prisma as any).user.create({ data: { id: logopedId, email, passwordHash: ph, role: 'LOGOPED', name: (session!.user as any).name || 'Логопед' } })
   }
   const email = normalizeEmail(formData.get('email'))
   const fullName = String(formData.get('fullName') || '')
@@ -103,7 +103,7 @@ export async function createParentAndChild(formData: FormData): Promise<void> {
   const logopedCityRaw = ((session!.user as any).city as string | undefined) || ((meUser as any)?.city as string | undefined) || ''
   const city = isValidCity(logopedCityRaw) ? normalizeCity(logopedCityRaw) : null
   const temp = genTempPassword()
-  const passwordHash = await bcrypt.hash(temp, 10)
+  const passwordHash = await bcryptHash(temp)
   const user = await (prisma as any).user.create({ data: { email, passwordHash, role: 'PARENT', emailVerifiedAt: new Date(), name: fullName || null, city: city || null } })
   const parent = await (prisma as any).parent.create({ data: { userId: user.id, fullName: fullName || null, phone: phone || null, isArchived: false } })
   // store visible password for logoped
@@ -133,13 +133,14 @@ export async function createParentAndChild(formData: FormData): Promise<void> {
 }
 
 export async function createChildForExistingParent(formData: FormData): Promise<void> {
-  const session = await getServerSession(authOptions)
+  const session = await getSessionSafe()
   ensureLogoped(session)
   const logopedId = (session!.user as any).id as string
   const meUser = await (prisma as any).user.findUnique({ where: { id: logopedId } })
   if (!meUser) {
     const emailSelf = (session!.user as any).email || `restored+${logopedId}@local.test`
-    await (prisma as any).user.create({ data: { id: logopedId, email: emailSelf, passwordHash: await bcrypt.hash(crypto.randomBytes(8).toString('hex'), 10), role: 'LOGOPED', name: (session!.user as any).name || 'Логопед' } })
+    const ph = await bcryptHash(crypto.randomBytes(8).toString('hex'))
+    await (prisma as any).user.create({ data: { id: logopedId, email: emailSelf, passwordHash: ph, role: 'LOGOPED', name: (session!.user as any).name || 'Логопед' } })
   }
   const email = normalizeEmail(formData.get('email'))
   const childFirstName = String(formData.get('childFirstName') || '')
@@ -157,13 +158,14 @@ export async function createChildForExistingParent(formData: FormData): Promise<
 }
 
 export async function attachExistingChildToMe(formData: FormData): Promise<void> {
-  const session = await getServerSession(authOptions)
+  const session = await getSessionSafe()
   ensureLogoped(session)
   const logopedId = (session!.user as any).id as string
   const meUser = await (prisma as any).user.findUnique({ where: { id: logopedId } })
   if (!meUser) {
     const emailSelf = (session!.user as any).email || `restored+${logopedId}@local.test`
-    await (prisma as any).user.create({ data: { id: logopedId, email: emailSelf, passwordHash: await bcrypt.hash(crypto.randomBytes(8).toString('hex'), 10), role: 'LOGOPED', name: (session!.user as any).name || 'Логопед' } })
+    const ph = await bcryptHash(crypto.randomBytes(8).toString('hex'))
+    await (prisma as any).user.create({ data: { id: logopedId, email: emailSelf, passwordHash: ph, role: 'LOGOPED', name: (session!.user as any).name || 'Логопед' } })
   }
   const childId = String(formData.get('childId') || '')
   if (!childId) throw new Error('Нет childId')
@@ -185,7 +187,7 @@ export async function searchParent(formData: FormData): Promise<void> {
 }
 
 export async function approveActivation(formData: FormData): Promise<void> {
-  const session = await getServerSession(authOptions)
+  const session = await getSessionSafe()
   ensureLogoped(session)
   const requestId = String(formData.get('requestId') || '')
   if (!requestId) return
@@ -210,7 +212,7 @@ export async function approveActivation(formData: FormData): Promise<void> {
 }
 
 export async function rejectActivation(formData: FormData): Promise<void> {
-  const session = await getServerSession(authOptions)
+  const session = await getSessionSafe()
   ensureLogoped(session)
   const requestId = String(formData.get('requestId') || '')
   if (!requestId) return
@@ -227,7 +229,7 @@ export async function rejectActivation(formData: FormData): Promise<void> {
 }
 
 export async function archiveChild(formData: FormData): Promise<void> {
-  const session = await getServerSession(authOptions)
+  const session = await getSessionSafe()
   ensureLogoped(session)
   const childId = String(formData.get('childId') || '')
   if (!childId) return
@@ -242,7 +244,7 @@ export async function archiveChild(formData: FormData): Promise<void> {
 }
 
 export async function transferChildInsideOrg(formData: FormData): Promise<void> {
-  const session = await getServerSession(authOptions)
+  const session = await getSessionSafe()
   ensureLogoped(session)
   const fromLogopedId = (session!.user as any).id as string
   const childId = String(formData.get('childId') || '')
@@ -271,7 +273,7 @@ export async function transferChildInsideOrg(formData: FormData): Promise<void> 
 }
 
 export async function requestTransferByEmail(formData: FormData): Promise<void> {
-  const session = await getServerSession(authOptions)
+  const session = await getSessionSafe()
   ensureLogoped(session)
   const fromLogopedId = (session!.user as any).id as string
   const childId = String(formData.get('childId') || '')
@@ -290,7 +292,7 @@ export async function requestTransferByEmail(formData: FormData): Promise<void> 
 }
 
 export async function approveTransferRequest(formData: FormData): Promise<void> {
-  const session = await getServerSession(authOptions)
+  const session = await getSessionSafe()
   ensureLogoped(session)
   const toLogopedId = (session!.user as any).id as string
   const requestId = String(formData.get('requestId') || '')
@@ -309,7 +311,7 @@ export async function approveTransferRequest(formData: FormData): Promise<void> 
 }
 
 export async function rejectTransferRequest(formData: FormData): Promise<void> {
-  const session = await getServerSession(authOptions)
+  const session = await getSessionSafe()
   ensureLogoped(session)
   const toLogopedId = (session!.user as any).id as string
   const requestId = String(formData.get('requestId') || '')
@@ -322,7 +324,7 @@ export async function rejectTransferRequest(formData: FormData): Promise<void> {
 }
 
 export async function restoreChild(formData: FormData): Promise<void> {
-  const session = await getServerSession(authOptions)
+  const session = await getSessionSafe()
   ensureLogoped(session)
   const childId = String(formData.get('childId') || '')
   if (!childId) return

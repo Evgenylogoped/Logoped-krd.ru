@@ -1,23 +1,18 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Inter, Roboto_Mono } from "next/font/google";
 import "./globals.css";
-import AuthProvider from "@/components/AuthProvider";
-import NavBar from "@/components/NavBar";
-import MobileTabBar from "@/components/mobile/MobileTabBar";
-import PWARegister from "@/components/PWARegister";
-import PrefetchImportant from "@/components/PrefetchImportant";
-import DesktopSidebar from "@/components/desktop/DesktopSidebar";
-import MobileAutoRedirect from "@/components/mobile/MobileAutoRedirect";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth"
+// Auth/UI providers are imported dynamically when NEXTAUTH_SECRET is available
+// next-auth can be unavailable during static builds; avoid hard import for TS
 
-const geistSans = Geist({
+export const dynamic = 'force-dynamic'
+
+const geistSans = Inter({
   variable: "--font-geist-sans",
   subsets: ["latin"],
 });
 
-const geistMono = Geist_Mono({
+const geistMono = Roboto_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
 });
@@ -43,7 +38,7 @@ export const metadata: Metadata = {
     card: 'summary_large_image',
     title: 'My Logoped — платформа для логопедов, родителей и организаций',
     description: 'My Logoped — расписание, записи, абонементы, чаты и выплаты — всё в одном удобном приложении.',
-    images: ['/og.svg', '/og'],
+    images: ['/og.png'],
   },
   icons: {
     icon: [
@@ -60,10 +55,74 @@ export default async function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const session = await getServerSession(authOptions)
-  const s: any = session as any
+  let s: any = null
+  try {
+    if (process.env.NEXTAUTH_SECRET) {
+      const na = 'next-auth' as const
+      const mod = await import(na as any).catch(() => null as any)
+      const auth = await import("@/lib/auth").catch(() => null as any)
+      if (mod?.getServerSession && auth?.authOptions) {
+        const session = await mod.getServerSession(auth.authOptions)
+        s = session as any
+      }
+    }
+  } catch {}
   const initialTheme = (s?.user?.theme as string | undefined) || 'default'
   const isAuthed = !!(s?.user as any)?.id
+
+  // If NEXTAUTH_SECRET is not set during build, render minimal layout without importing next-auth dependent modules
+  if (!process.env.NEXTAUTH_SECRET) {
+    return (
+      <html lang="ru" suppressHydrationWarning data-theme={initialTheme}>
+        <head>
+          <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+          <meta name="color-scheme" content="light" />
+          {/* iOS PWA fullscreen */}
+          <meta name="apple-mobile-web-app-capable" content="yes" />
+          <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+          <meta name="apple-mobile-web-app-title" content="My Logoped" />
+          <link rel="manifest" href="/manifest.json" />
+          <link rel="icon" href="/icons/favicon.svg" type="image/svg+xml" />
+          <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
+          <link rel="icon" type="image/png" sizes="16x16" href="/icons/favicon-16.png" />
+          <link rel="apple-touch-icon" href="/icons/apple-touch-icon-180.png" />
+          <link rel="mask-icon" href="/icons/safari-pinned-tab.svg" color="#4f46e5" />
+          {/* Open Graph / Twitter */}
+          <meta property="og:title" content="My Logoped" />
+          <meta property="og:description" content="My Logoped — расписание, записи, абонементы, чаты и выплаты — всё в одном удобном приложении." />
+          <meta property="og:type" content="website" />
+          <meta property="og:image" content="/og.png" />
+          <meta property="og:site_name" content="My Logoped" />
+          <meta property="og:url" content="https://logoped-krd.ru" />
+          <meta property="og:image:width" content="1200" />
+          <meta property="og:image:height" content="630" />
+          <meta name="twitter:card" content="summary_large_image" />
+          <meta name="twitter:title" content="My Logoped" />
+          <meta name="twitter:description" content="My Logoped — расписание, записи, абонементы, чаты и выплаты — всё в одном удобном приложении." />
+          <meta name="twitter:image" content="/og.png" />
+        </head>
+        <body
+          suppressHydrationWarning
+          className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+          style={{ background: 'var(--background)', color: 'var(--foreground)' }}
+        >
+          {children}
+        </body>
+      </html>
+    )
+  }
+
+  // NEXTAUTH_SECRET is present: import full UI stack lazily to avoid build-time module evaluation
+  const [AuthProvider, NavBar, MobileTabBar, PWARegister, PrefetchImportant, DesktopSidebar, MobileAutoRedirect] = await Promise.all([
+    import("@/components/AuthProvider").then(m => m.default),
+    import("@/components/NavBar").then(m => m.default),
+    import("@/components/mobile/MobileTabBar").then(m => m.default),
+    import("@/components/PWARegister").then(m => m.default),
+    import("@/components/PrefetchImportant").then(m => m.default),
+    import("@/components/desktop/DesktopSidebar").then(m => m.default),
+    import("@/components/mobile/MobileAutoRedirect").then(m => m.default),
+  ])
+
   return (
     <html lang="ru" suppressHydrationWarning data-theme={initialTheme}>
       <head>
