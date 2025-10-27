@@ -106,13 +106,13 @@ export default function DesktopSidebar({ role: roleProp, city: cityProp }: { rol
           <div className="mb-3">
             <div className="grid gap-1">
               {(() => {
-                const isAdminLike = role === 'ADMIN' || role === 'SUPER_ADMIN' || role === 'ACCOUNTANT'
-                const homeHref = role === 'LOGOPED' ? '/logoped' : (isAdminLike ? '/admin' : (role === 'PARENT' ? '/parent' : '/'))
+                const isAdminLike = roleU === 'ADMIN' || roleU === 'SUPER_ADMIN' || roleU === 'ACCOUNTANT'
+                const homeHref = roleU === 'LOGOPED' ? '/logoped' : (isAdminLike ? '/admin' : (roleU === 'PARENT' ? '/parent' : '/'))
                 return <Item href={homeHref} icon={<Icon name="home" />} label="Главная" collapsed={!pinned} />
               })()}
             </div>
           </div>
-          {role === 'PARENT' && (
+          {roleU === 'PARENT' && (
             <div className="mb-3">
               <div className="grid gap-1">
                 <Item href="/parent/lessons" icon={<Icon name="calendar" />} label="Занятия" collapsed={!pinned} />
@@ -121,7 +121,7 @@ export default function DesktopSidebar({ role: roleProp, city: cityProp }: { rol
               </div>
             </div>
           )}
-          {role === 'LOGOPED' && (
+          {roleU === 'LOGOPED' && (
             <div className="mb-3">
               <div className="grid gap-1">
                 <div className="relative">
@@ -187,7 +187,7 @@ export default function DesktopSidebar({ role: roleProp, city: cityProp }: { rol
               <Item href="/settings/profile" icon={<Icon name="user" />} label="Профиль" collapsed={!pinned} />
               <Item href="/settings/password" icon={<Icon name="lock" />} label="Пароль" collapsed={!pinned} />
               <Item href="/settings/billing" icon={<Icon name="login" />} label="Подписка" collapsed={!pinned} />
-              {role === 'LOGOPED' && plan !== 'free' && (
+              {roleU === 'LOGOPED' && plan !== 'free' && (
                 <Item href="/settings/schedule/template" icon={<Icon name="calendar" />} label="Шаблон недели" collapsed={!pinned} />
               )}
             </div>
@@ -200,7 +200,7 @@ export default function DesktopSidebar({ role: roleProp, city: cityProp }: { rol
               </div>
             </div>
           )}
-          {(role === 'ADMIN' || role === 'SUPER_ADMIN' || role === 'ACCOUNTANT') && (
+          {(roleU === 'ADMIN' || roleU === 'SUPER_ADMIN' || roleU === 'ACCOUNTANT') && (
             <div className="mb-3">
               <div className={`${pinned ? 'text-xs uppercase text-muted mb-2' : 'sr-only'}`}>Админ</div>
               <div className="grid gap-1">
@@ -221,9 +221,9 @@ export default function DesktopSidebar({ role: roleProp, city: cityProp }: { rol
                   <Item href="/admin/subscriptions/requests" icon={<span>•</span>} label="Заявки на смену" collapsed={!pinned} />
                   <Item href="/admin/subscriptions/limit-requests" icon={<span>•</span>} label="Лимит‑заявки" collapsed={!pinned} />
                 </div>
-                            {role === 'SUPER_ADMIN' && (<Item href="/admin/backups" icon={<Icon name="settings" />} label="Бэкапы" collapsed={!pinned} />)}
-                  {role === 'SUPER_ADMIN' && (<Item href="/admin/system/gui" icon={<Icon name="settings" />} label="Системное администрирование" collapsed={!pinned} />)}
-<Item href="/admin/tools/purge" icon={<Icon name="settings" />} label="Очистка" collapsed={!pinned} />
+                            {roleU === 'SUPER_ADMIN' && (<Item href="/admin/backups" icon={<Icon name="settings" />} label="Бэкапы" collapsed={!pinned} />)}
+                  {roleU === 'SUPER_ADMIN' && (<Item href="/admin/system/gui" icon={<Icon name="settings" />} label="Системное администрирование" collapsed={!pinned} />)}
+                <Item href="/admin/tools/purge" icon={<Icon name="settings" />} label="Очистка" collapsed={!pinned} />
               </div>
             </div>
           )}
