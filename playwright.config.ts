@@ -4,6 +4,10 @@ const config: PlaywrightTestConfig = {
   timeout: 30_000,
   retries: process.env.CI ? 2 : 0,
   globalSetup: require.resolve('./tests/e2e/global-setup.ts'),
+  testIgnore: [
+    '**/.DS_Store',
+    '**/._*', // AppleDouble resource fork files from macOS
+  ],
   use: {
     baseURL: process.env.E2E_BASE_URL || 'http://localhost:3000',
     headless: true,

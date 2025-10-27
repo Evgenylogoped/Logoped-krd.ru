@@ -74,6 +74,12 @@ jobs:
         run: |
           if [ -f prisma/seed-e2e.cjs ]; then node prisma/seed-e2e.cjs; else echo "skip seed-e2e"; fi
 
+      - name: Cleanup macOS AppleDouble files
+        run: |
+          echo "Removing AppleDouble files..."
+          find tests/e2e -type f -name '._*' -print -delete || true
+          find . -type f -name '.DS_Store' -print -delete || true
+
       - name: Install Playwright Browsers
         run: npx playwright install --with-deps
 
