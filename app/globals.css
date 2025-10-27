@@ -51,10 +51,10 @@ hr, .divider {
   border-color: var(--border) !important;
 }
 
-/* Desktop sidebar spacing */
-@media (min-width: 768px) {
-  body { padding-left: 72px; }
-  body.sidebar-pinned { padding-left: 240px; }
+/* Desktop sidebar spacing: apply only when sidebar is present (aligned with JS at 1024px) */
+@media (min-width: 1024px) {
+  body.sidebar-present { padding-left: 72px; }
+  body.sidebar-present.sidebar-pinned { padding-left: 240px; }
 }
 
 /* Design system */

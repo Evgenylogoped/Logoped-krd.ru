@@ -89,6 +89,7 @@ export default async function RootLayout({
         <link rel="icon" type="image/png" sizes="16x16" href="/icons/favicon-16.png" />
         <link rel="apple-touch-icon" href="/icons/apple-touch-icon-180.png" />
         <link rel="mask-icon" href="/icons/safari-pinned-tab.svg" color="#4f46e5" />
+        <style>{`@media (min-width:768px){ body:not(.sidebar-present){ padding-left:0 !important } body.sidebar-pinned:not(.sidebar-present){ padding-left:0 !important } } @media (min-width:1024px){ body.sidebar-present{ padding-left:72px } body.sidebar-present.sidebar-pinned{ padding-left:240px } }`}</style>
         {/* Open Graph / Twitter */}
         <meta property="og:title" content="My Logoped" />
         <meta property="og:description" content="My Logoped — расписание, записи, абонементы, чаты и выплаты — всё в одном удобном приложении." />
@@ -108,6 +109,7 @@ export default async function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
         style={{ background: 'var(--background)', color: 'var(--foreground)' }}
         data-user-role={(s?.user as any)?.role || ''}
+        data-authed={isAuthed ? '1' : ''}
       >
         {/* iOS zoom guard */}
         <script
@@ -130,7 +132,12 @@ export default async function RootLayout({
         />
         <script
           dangerouslySetInnerHTML={{
-            __html: `try{var applyTheme=function(){var t=localStorage.getItem('theme')||'${initialTheme || 'default'}';if(document.documentElement.getAttribute('data-theme')!==t){document.documentElement.setAttribute('data-theme',t)}};applyTheme();setTimeout(applyTheme,100);setTimeout(applyTheme,1000);window.addEventListener('storage',function(e){if(e.key==='theme') applyTheme()});document.addEventListener('visibilitychange',function(){if(document.visibilityState==='visible') applyTheme()});if(localStorage.getItem('sidebar.pinned')==='1'){document.body.classList.add('sidebar-pinned')}}catch(e){}`
+            __html: `try{var applyTheme=function(){var t=localStorage.getItem('theme')||'${initialTheme || 'default'}';if(document.documentElement.getAttribute('data-theme')!==t){document.documentElement.setAttribute('data-theme',t)}};applyTheme();setTimeout(applyTheme,100);setTimeout(applyTheme,1000);window.addEventListener('storage',function(e){if(e.key==='theme') applyTheme()});document.addEventListener('visibilitychange',function(){if(document.visibilityState==='visible') applyTheme()});var authed=document.body.getAttribute('data-authed')==='1';if(authed){if(localStorage.getItem('sidebar.pinned')==='1'){document.body.classList.add('sidebar-pinned')}}else{try{localStorage.setItem('sidebar.pinned','0')}catch(_e){};document.body.classList.remove('sidebar-pinned');document.body.classList.remove('sidebar-present');}}catch(e){}`
+          }}
+        />
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `try{var authed=document.body.getAttribute('data-authed')==='1';if(!authed){document.body.classList.remove('sidebar-present');document.body.classList.remove('sidebar-pinned');try{document.body.style.setProperty('padding-left','0px','important')}catch(_e){};try{var mo=new MutationObserver(function(){document.body.classList.remove('sidebar-present');document.body.classList.remove('sidebar-pinned');document.body.style.setProperty('padding-left','0px','important')});mo.observe(document.body,{attributes:true,attributeFilter:['class']})}catch(_e){}}else{if(localStorage.getItem('sidebar.pinned')==='1'){document.body.classList.add('sidebar-pinned')}}}catch(e){}`
           }}
         />
         <AuthProvider>
@@ -149,6 +156,12 @@ export default async function RootLayout({
           {children}
           <PWARegister />
           <PrefetchImportant />
+          {/* Late-inserted reset to override stale hashed CSS chunks after they load */}
+          <script
+            dangerouslySetInnerHTML={{
+              __html: `try{(function(){var css='@media (min-width:0px){ body:not(.sidebar-present){ padding-left:0 !important } body.sidebar-pinned:not(.sidebar-present){ padding-left:0 !important } } @media (min-width:1024px){ body.sidebar-present{ padding-left:72px !important } body.sidebar-present.sidebar-pinned{ padding-left:240px !important } }';var id='sidebar-reset-css';if(!document.getElementById(id)){var s=document.createElement('style');s.id=id;s.appendChild(document.createTextNode(css));document.head.appendChild(s)}})()}catch(e){}`
+            }}
+          />
           {isAuthed && (
             <>
               {/* Автопереходы на мобиле */}
