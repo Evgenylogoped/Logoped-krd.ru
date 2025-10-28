@@ -79,6 +79,7 @@ export default async function RootLayout({
       <head>
         <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
         <meta name="color-scheme" content="light" />
+        <script dangerouslySetInnerHTML={{ __html: `try{(function(){if(typeof window==='undefined')return;var k='sw.purged.v1';if(window.sessionStorage&&sessionStorage.getItem(k))return;sessionStorage&&sessionStorage.setItem(k,'1');if('serviceWorker'in navigator){navigator.serviceWorker.getRegistrations().then(function(rs){rs.forEach(function(r){r.unregister().catch(function(){})})}).catch(function(){})}try{if(typeof caches!=='undefined'&&caches.keys){caches.keys().then(function(keys){return Promise.all(keys.map(function(x){return caches.delete(x)}))}).catch(function(){})}}catch(e){}})()}catch(e){}` }} />
         {/* iOS PWA fullscreen */}
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -89,7 +90,7 @@ export default async function RootLayout({
         <link rel="icon" type="image/png" sizes="16x16" href="/icons/favicon-16.png" />
         <link rel="apple-touch-icon" href="/icons/apple-touch-icon-180.png" />
         <link rel="mask-icon" href="/icons/safari-pinned-tab.svg" color="#4f46e5" />
-        <style>{`@media (min-width:768px){ body:not(.sidebar-present){ padding-left:0 !important } body.sidebar-pinned:not(.sidebar-present){ padding-left:0 !important } } @media (min-width:1024px){ body.sidebar-present{ padding-left:72px } body.sidebar-present.sidebar-pinned{ padding-left:240px } }`}</style>
+        <style>{`@media (min-width:0px){ body[data-authed=""]{ padding-left:0 !important } body.sidebar-pinned:not(.sidebar-present){ padding-left:0 !important } } @media (min-width:1024px){ body.sidebar-present{ padding-left:72px } body.sidebar-present.sidebar-pinned{ padding-left:240px } }`}</style>
         {/* Open Graph / Twitter */}
         <meta property="og:title" content="My Logoped" />
         <meta property="og:description" content="My Logoped — расписание, записи, абонементы, чаты и выплаты — всё в одном удобном приложении." />
@@ -107,7 +108,7 @@ export default async function RootLayout({
       <body
         suppressHydrationWarning
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
-        style={{ background: 'var(--background)', color: 'var(--foreground)' }}
+        style={{ background: 'var(--background)', color: 'var(--foreground)', ...(isAuthed ? {} : { paddingLeft: 0 }) }}
         data-user-role={(s?.user as any)?.role || ''}
         data-authed={isAuthed ? '1' : ''}
       >
@@ -159,7 +160,7 @@ export default async function RootLayout({
           {/* Late-inserted reset to override stale hashed CSS chunks after they load */}
           <script
             dangerouslySetInnerHTML={{
-              __html: `try{(function(){var css='@media (min-width:0px){ body:not(.sidebar-present){ padding-left:0 !important } body.sidebar-pinned:not(.sidebar-present){ padding-left:0 !important } } @media (min-width:1024px){ body.sidebar-present{ padding-left:72px !important } body.sidebar-present.sidebar-pinned{ padding-left:240px !important } }';var id='sidebar-reset-css';if(!document.getElementById(id)){var s=document.createElement('style');s.id=id;s.appendChild(document.createTextNode(css));document.head.appendChild(s)}})()}catch(e){}`
+              __html: `try{(function(){var css='@media (min-width:0px){ body[data-authed=""]{ padding-left:0 !important } body.sidebar-pinned:not(.sidebar-present){ padding-left:0 !important } } @media (min-width:1024px){ body.sidebar-present{ padding-left:72px !important } body.sidebar-present.sidebar-pinned{ padding-left:240px !important } }';var id='sidebar-reset-css';if(!document.getElementById(id)){var s=document.createElement('style');s.id=id;s.appendChild(document.createTextNode(css));document.head.appendChild(s)}})()}catch(e){}`
             }}
           />
           {isAuthed && (
