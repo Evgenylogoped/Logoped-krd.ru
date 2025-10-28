@@ -1,13 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server'
 export const runtime = 'nodejs'
+export const revalidate = 0
+export const dynamic = 'force-dynamic'
 import { getServerSession } from 'next-auth'
+import { getToken } from 'next-auth/jwt'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions)
-  if (!session?.user) return new NextResponse('Unauthorized', { status: 401 })
-  const userId = (session.user as any).id as string
+  let userId: string | null = null
+  if (session?.user && (session.user as any).id) userId = String((session.user as any).id)
+  if (!userId) {
+    try {
+      const tok = await getToken({ req, secret: process.env.NEXTAUTH_SECRET })
+      if (tok && (tok as any).id) userId = String((tok as any).id)
+    } catch {}
+  }
+  if (!userId) return new NextResponse('Unauthorized', { status: 401 })
   const { conversationId, targetUserId, body, replyToId } = await req.json()
   if ((!conversationId && !targetUserId) || !body) return new NextResponse('Bad Request', { status: 400 })
 

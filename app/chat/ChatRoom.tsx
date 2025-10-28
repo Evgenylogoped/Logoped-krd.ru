@@ -117,15 +117,20 @@ export default function ChatRoom({ conversationId, selfId, initialMessages, chil
         const optimistic: Message = { id: tempId, conversationId, authorId: selfId, body: text || (type!=='TEXT' ? (type==='IMAGE'?'[Изображение]': type==='VIDEO'?'[Видео]': type==='AUDIO'?'[Аудио]': type==='PDF'?'[PDF]':'[Файл]') : ''), createdAt: new Date().toISOString(), replyToId: replyTo?.id || null, type, attachmentUrl: url || null }
         setMessages(prev => [...prev, optimistic])
         try {
-          const saved = await sendMessageAction({ conversationId, body: optimistic.body, replyToId: optimistic.replyToId || null, type: optimistic.type, attachmentUrl: optimistic.attachmentUrl || null })
-          // обработка структурной ошибки без исключения
-          if (saved && (saved as any).__error) {
+          const r = await fetch('/api/chat/send', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ conversationId, body: optimistic.body, replyToId: optimistic.replyToId || null }),
+            credentials: 'include',
+          })
+          if (!r.ok) {
             setMessages(prev => prev.filter(m => m.id !== tempId))
-            if (typeof window !== 'undefined') {
-              window.alert(String((saved as any).__error || 'Не удалось отправить сообщение'))
-            }
+            const txt = await r.text().catch(()=> '')
+            if (typeof window !== 'undefined') window.alert(txt || 'Не удалось отправить сообщение')
             return
           }
+          const j = await r.json().catch(()=> ({} as any))
+          const saved = (j as any).message || j
           // заменить оптимистическое сообщение на реальное БЕЗ изменения позиции/времени
           setMessages(prev => prev.map(m => m.id === tempId ? ({ ...(saved as any), createdAt: optimistic.createdAt }) : m))
         } catch (err) {
@@ -283,16 +288,18 @@ let typingLabel = typingUsers.length > 0 ? 'Печатает...' : ''
               onChange={async (e) => { setInput(e.target.value); try { await setTyping(conversationId, 2000) } catch {} }}
               className="input flex-1"
               placeholder={editId ? 'Редактирование сообщения...' : 'Напишите сообщение...'}
+              name="message"
+              id="chat-message"
             />
             <label className="btn btn-secondary cursor-pointer">
               Файл
-              <input type="file" className="hidden" onChange={onPickFile} />
+              <input type="file" className="hidden" onChange={onPickFile} name="file" id="chat-file" />
             </label>
             <button disabled={loading} className="btn btn-primary">{editId ? 'Сохранить' : 'Отправить'}</button>
           </div>
           <div className="flex flex-col gap-2">
             <div className="flex gap-2 items-center">
-              <input value={attachUrl} onChange={(e)=>{ setAttachUrl(e.target.value); setAttachLoaded(false); }} className="input flex-1" placeholder="Ссылка на файл/изображение/видео (опц.)" />
+              <input value={attachUrl} onChange={(e)=>{ setAttachUrl(e.target.value); setAttachLoaded(false); }} className="input flex-1" placeholder="Ссылка на файл/изображение/видео (опц.)" name="attachmentUrl" id="chat-attachment-url" />
               {attachUrl && (
                 isImage(attachUrl) ? <span className="text-xs">Изображение</span>
                 : isVideo(attachUrl) ? <span className="text-xs">Видео</span>
