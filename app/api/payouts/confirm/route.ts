@@ -8,9 +8,22 @@ export async function POST(req: NextRequest) {
   const getServerSession: any = mod?.getServerSession
   const authOptions = auth?.authOptions
   const session = (typeof getServerSession === 'function' && authOptions) ? await getServerSession(authOptions) : null
-  const role = (session?.user as any)?.role as string | undefined
-  const adminId = (session?.user as any)?.id as string | undefined
-  if (!session) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  let role = (session?.user as any)?.role as string | undefined
+  let adminId = (session?.user as any)?.id as string | undefined
+  if (!role || !adminId) {
+    try {
+      const jwtMod = await import('next-auth/jwt').catch(() => null as any)
+      const getToken: any = jwtMod?.getToken
+      if (typeof getToken === 'function') {
+        const token: any = await getToken({ req, secureCookie: true }).catch(() => null)
+        if (token) {
+          role = (token.role as string | undefined) || role
+          adminId = (token.sub as string | undefined) || (token.userId as string | undefined) || adminId
+        }
+      }
+    } catch {}
+  }
+  if (!role || !adminId) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   const r = role ?? ''
   let allowed = ['ADMIN','SUPER_ADMIN','ACCOUNTANT'].includes(r)
   if (!allowed && role === 'LOGOPED') {

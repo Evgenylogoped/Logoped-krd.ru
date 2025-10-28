@@ -25,5 +25,8 @@ export async function POST(req: NextRequest) {
       await (prisma as any).payoutRequest.updateMany({ where: { logopedId: userId, status: 'PENDING' }, data: { status: 'CANCELLED' } })
     }
   } catch {}
-  return NextResponse.redirect(new URL('/logoped/org-finance?cancelled=1', req.url), 303)
+  const proto = req.headers.get('x-forwarded-proto') || 'https'
+  const host = req.headers.get('x-forwarded-host') || req.headers.get('host') || 'logoped-krd.ru'
+  const origin = `${proto}://${host}`
+  return NextResponse.redirect(new URL('/logoped/org-finance?cancelled=1', origin), 303)
 }
