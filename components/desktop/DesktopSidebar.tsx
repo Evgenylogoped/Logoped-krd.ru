@@ -41,6 +41,21 @@ export default function DesktopSidebar({ role: roleProp, city: cityProp }: { rol
   }, [roleProp, roleState])
   const role = (roleProp ?? roleState) as any
   const roleU = (role || '').toUpperCase()
+  const [leaderApi, setLeaderApi] = React.useState<{ isOrgLeader: boolean; isBranchManager: boolean; branchId?: string | null; companyId?: string | null } | null>(null)
+  React.useEffect(() => {
+    let ignore = false
+    ;(async () => {
+      try {
+        const r = await fetch('/api/me', { cache: 'no-store' })
+        if (!r.ok) return
+        const j = await r.json()
+        if (!ignore && j && (typeof j.isOrgLeader === 'boolean' || typeof j.isBranchManager === 'boolean')) {
+          setLeaderApi({ isOrgLeader: !!j.isOrgLeader, isBranchManager: !!j.isBranchManager, branchId: j.branchId ?? null, companyId: j.companyId ?? null })
+        }
+      } catch {}
+    })()
+    return () => { ignore = true }
+  }, [])
   const [pinned, setPinned] = React.useState<boolean>(() => {
     try {
       if (typeof window === "undefined") return true;
@@ -54,8 +69,9 @@ export default function DesktopSidebar({ role: roleProp, city: cityProp }: { rol
   })
   const cityRaw = (cityProp as string | undefined)?.trim()
   // Флаги по умолчанию теперь зависят от роли, чтобы не прятать разделы
-  const isLeader = ['ADMIN','SUPER_ADMIN','ACCOUNTANT','SUPERVISOR','OWNER','LEADER','MANAGER','ORGANIZER'].includes(roleU)
-  const inOrg = true
+  const isLeaderRole = ['ADMIN','SUPER_ADMIN','ACCOUNTANT','SUPERVISOR','OWNER','LEADER','MANAGER','ORGANIZER'].includes(roleU)
+  const isLeader = (leaderApi?.isOrgLeader || leaderApi?.isBranchManager) ? true : isLeaderRole
+  const inOrg = !!(leaderApi?.branchId)
   const plan: 'beta'|'free'|'pro'|'pro_plus'|'max' = 'pro_plus'
 
   function togglePin() {

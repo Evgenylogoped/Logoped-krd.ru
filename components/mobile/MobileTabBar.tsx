@@ -21,17 +21,31 @@ export default function MobileTabBar({ role: roleProp, leaderFlag: leaderFlagPro
   const R = (role || "").toUpperCase()
   const isParent = R === "PARENT"
   const isLogoped = R === "LOGOPED"
-  const roleLeader = ["ADMIN","ACCOUNTANT","SUPER_ADMIN","SUPERVISOR","OWNER","LEADER","MANAGER","ORGANIZER"].includes(R)
   const [mounted, setMounted] = useState(false)
   const [leaderFlag] = useState<boolean | null>(leaderFlagProp ?? null)
   const [moreOpen, setMoreOpen] = useState(false)
   const pathname = usePathname()
+  const [leaderApi, setLeaderApi] = React.useState<{ isOrgLeader: boolean; isBranchManager: boolean } | null>(null)
+  React.useEffect(() => {
+    let ignore = false
+    ;(async () => {
+      try {
+        const r = await fetch('/api/me', { cache: 'no-store' })
+        if (!r.ok) return
+        const j = await r.json()
+        if (!ignore && j && (typeof j.isOrgLeader === 'boolean' || typeof j.isBranchManager === 'boolean')) {
+          setLeaderApi({ isOrgLeader: !!j.isOrgLeader, isBranchManager: !!j.isBranchManager })
+        }
+      } catch {}
+    })()
+    return () => { ignore = true }
+  }, [])
   useEffect(() => setMounted(true), [])
 
   // без дополнительных запросов — чтобы исключить перепрыгивания UI
     if (!mounted) return null
 
-  const showLeader = (leaderFlag === true) || (leaderFlag === null && roleLeader && !isLogoped && !isParent)
+  const showLeader = (leaderFlag === true) || (leaderFlag === null && (leaderApi?.isOrgLeader || leaderApi?.isBranchManager) && !isParent)
   const showLogoped = !showLeader && isLogoped
   const showParent = !showLeader && !showLogoped && isParent
 
