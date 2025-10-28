@@ -21,6 +21,20 @@ export async function POST(req: NextRequest) {
           adminId = (token.sub as string | undefined) || (token.userId as string | undefined) || adminId
         }
       }
+      // Manual cookie decode fallback
+      if (!role || !adminId) {
+        const cookie = req.headers.get('cookie') || ''
+        const m = cookie.match(/(?:__Secure-)?next-auth\.session-token=([^;]+)/)
+        const raw = m ? decodeURIComponent(m[1]) : ''
+        if (raw && jwtMod?.decode) {
+          const secret = process.env.NEXTAUTH_SECRET as string | undefined
+          const decoded: any = await jwtMod.decode({ token: raw, secret: secret || '' }).catch(() => null)
+          if (decoded) {
+            role = (decoded.role as string | undefined) || role
+            adminId = (decoded.sub as string | undefined) || adminId
+          }
+        }
+      }
     } catch {}
   }
   if (!role || !adminId) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
@@ -116,9 +130,13 @@ export async function POST(req: NextRequest) {
     (prisma as any).payoutRequest.update({ where: { id: payoutId }, data: { status: 'PAID', confirmedAt: new Date(), confirmedById: adminId } })
   ])
 
-  // Build absolute URL based on original forwarded origin to avoid "localhost" redirects behind proxy
-  const proto = req.headers.get('x-forwarded-proto') || 'https'
-  const host = req.headers.get('x-forwarded-host') || req.headers.get('host') || 'logoped-krd.ru'
-  const origin = `${proto}://${host}`
+  // Build absolute URL based on Referer or forwarded origin to avoid "localhost" redirects behind proxy
+  const ref = req.headers.get('referer')
+  const origin = (() => {
+    try { if (ref) { const u = new URL(ref); return `${u.protocol}//${u.host}` } } catch {}
+    const proto = req.headers.get('x-forwarded-proto') || 'https'
+    const host = req.headers.get('x-forwarded-host') || req.headers.get('host') || 'logoped-krd.ru'
+    return `${proto}://${host}`
+  })()
   return NextResponse.redirect(new URL('/admin/finance/payouts', origin), 303)
 }
