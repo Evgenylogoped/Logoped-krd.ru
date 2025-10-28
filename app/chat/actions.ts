@@ -1,4 +1,5 @@
 "use server"
+export const runtime = 'nodejs'
 import { prisma } from '@/lib/prisma'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
@@ -192,116 +193,114 @@ export async function listMessages(conversationId: string, sinceTs?: number) {
 }
 
 export async function sendMessageAction(params: { conversationId?: string; targetUserId?: string; body: string; replyToId?: string | null; type?: string; attachmentUrl?: string | null }) {
-  const session = await getSessionSafe()
-  if (!session?.user) return { __error: 'Unauthorized' } as any
-  const me = String((session.user as { id?: string }).id || '')
-  const { conversationId, targetUserId, body, replyToId, type, attachmentUrl } = params
-  if ((!conversationId && !targetUserId) || !body) return { __error: 'Неверные параметры' } as any
-  // find/create conversation
-  let conv: {
-    id: string
-    title?: string | null
-    participants?: { userId: string; role?: string | null }[]
-    settings?: { postingPolicy?: string | null; restrictedJson?: unknown } | null
-  } | null = null
-  if (conversationId) {
-    conv = await prisma.conversation.findFirst({ where: { id: conversationId, participants: { some: { userId: me } } }, include: { participants: true, settings: true } })
-  } else {
-    const other = String(targetUserId)
-    conv = await prisma.conversation.findFirst({
-      where: { AND: [ { participants: { some: { userId: me } } }, { participants: { some: { userId: other } } } ] },
-      include: { participants: true, settings: true }
-    })
-    if (!conv) conv = await prisma.conversation.create({ data: { participants: { create: [{ userId: me, role: 'MEMBER' }, { userId: other, role: 'MEMBER' }] } } })
-  }
-  if (!conv) return { __error: 'Чат недоступен' } as any
-
-  // Базовая проверка подписки на отправку сообщений — без выброса в 500
   try {
-    await ensureChatAllowed(me)
-  } catch (e) {
-    const msg = (e && typeof e === 'object' && 'message' in e) ? String((e as any).message || '') : 'Чат недоступен'
-    return { __error: msg } as any
-  }
-  // Policy enforcement for group chats
-  const isGroup = typeof conv.title === 'string' && conv.title.startsWith('group:')
-  if (isGroup) {
-    const myPart = (conv.participants || []).find((p: { userId: string })=> p.userId === me)
-    const myRole = myPart?.role || 'MEMBER'
-    // participant state
-    const partState = await prisma.conversationParticipantState.findUnique({ where: { conversationId_userId: { conversationId: conv.id, userId: me } } }).catch(()=>null)
-    const now = Date.now()
-    const banned = partState?.bannedUntil ? new Date(partState.bannedUntil).getTime() > now : false
-    const muted = partState?.mutedUntil ? new Date(partState.mutedUntil).getTime() > now : false
-    const canPostFlag = partState?.canPost !== false
-    // settings
-    const st = conv.settings || null
-    const policy = st?.postingPolicy || 'ALL'
-    let allowedByPolicy = true
-    if (policy === 'LOGOPED_ONLY') {
-      allowedByPolicy = (myRole === 'ADMIN' || myRole === 'LOGOPED')
-    } else if (policy === 'RESTRICTED') {
-      // if restrictedJson present and has my id false => block
-      try {
-        const map = st?.restrictedJson as unknown
-        if (map && typeof map === 'object' && me in (map as Record<string, unknown>)) {
-          if ((map as Record<string, unknown>)[me] === false) allowedByPolicy = false
-        }
-      } catch {}
+    const session = await getSessionSafe()
+    if (!session?.user) return { __error: 'Unauthorized' } as any
+    const me = String((session.user as { id?: string }).id || '')
+    const { conversationId, targetUserId, body, replyToId, type, attachmentUrl } = params
+    if ((!conversationId && !targetUserId) || !body) return { __error: 'Неверные параметры' } as any
+    // find/create conversation
+    let conv: {
+      id: string
+      title?: string | null
+      participants?: { userId: string; role?: string | null }[]
+      settings?: { postingPolicy?: string | null; restrictedJson?: unknown } | null
+    } | null = null
+    if (conversationId) {
+      conv = await prisma.conversation.findFirst({ where: { id: conversationId, participants: { some: { userId: me } } }, include: { participants: true, settings: true } })
+    } else {
+      const other = String(targetUserId)
+      conv = await prisma.conversation.findFirst({
+        where: { AND: [ { participants: { some: { userId: me } } }, { participants: { some: { userId: other } } } ] },
+        include: { participants: true, settings: true }
+      })
+      if (!conv) conv = await prisma.conversation.create({ data: { participants: { create: [{ userId: me, role: 'MEMBER' }, { userId: other, role: 'MEMBER' }] } } })
     }
-    if (!canPostFlag || banned) return { __error: 'Отправка сообщений временно запрещена' } as any
-    if (!allowedByPolicy) {
-      // Fallback: если это родитель, перенаправим сообщение в персональный чат с логопедом/админом
-      try {
-        const u = await (prisma as any).user.findUnique({ where: { id: me }, select: { role: true } })
-        if ((u?.role as string | undefined) === 'PARENT') {
-          const targetUserId = (() => {
-            // приоритет: ADMIN участник группы → LOGOPED → любой другой кроме меня
-            const parts = (conv.participants || []) as any[]
-            const admin = parts.find(p => (p.userId !== me) && ((p.role || '').toUpperCase() === 'ADMIN'))
-            if (admin) return admin.userId
-            const log = parts.find(p => (p.userId !== me) && ((p.role || '').toUpperCase() === 'LOGOPED'))
-            if (log) return log.userId
-            const other = parts.find(p => p.userId !== me)
-            return other?.userId as string | undefined
-          })()
-          if (targetUserId) {
-            // найти/создать персональный диалог и переслать туда
-            let pconv = await prisma.conversation.findFirst({ where: { AND: [ { participants: { some: { userId: me } } }, { participants: { some: { userId: targetUserId } } } ] } })
-            if (!pconv) pconv = await prisma.conversation.create({ data: { participants: { create: [{ userId: me, role: 'MEMBER' }, { userId: targetUserId, role: 'MEMBER' }] } } })
-            await prisma.message.create({ data: { conversationId: pconv.id, authorId: me, body, replyToId: replyToId || null, type: type || 'TEXT', attachmentUrl: attachmentUrl || null } })
-            await prisma.conversation.update({ where: { id: pconv.id }, data: { updatedAt: new Date() } })
-            await prisma.conversationParticipant.update({ where: { conversationId_userId: { conversationId: pconv.id, userId: me } }, data: { lastReadAt: new Date() } })
-            revalidatePath('/chat')
-            revalidatePath(`/chat/${pconv.id}`)
-            return { rerouted: true, conversationId: String(pconv.id) }
+    if (!conv) return { __error: 'Чат недоступен' } as any
+
+    // Базовая проверка подписки на отправку сообщений — без выброса в 500
+    try {
+      await ensureChatAllowed(me)
+    } catch (e) {
+      const msg = (e && typeof e === 'object' && 'message' in e) ? String((e as any).message || '') : 'Чат недоступен'
+      return { __error: msg } as any
+    }
+    // Policy enforcement for group chats
+    const isGroup = typeof conv.title === 'string' && conv.title.startsWith('group:')
+    if (isGroup) {
+      const myPart = (conv.participants || []).find((p: { userId: string })=> p.userId === me)
+      const myRole = myPart?.role || 'MEMBER'
+      // participant state
+      const partState = await prisma.conversationParticipantState.findUnique({ where: { conversationId_userId: { conversationId: conv.id, userId: me } } }).catch(()=>null)
+      const now = Date.now()
+      const banned = partState?.bannedUntil ? new Date(partState.bannedUntil).getTime() > now : false
+      const muted = partState?.mutedUntil ? new Date(partState.mutedUntil).getTime() > now : false
+      const canPostFlag = partState?.canPost !== false
+      // settings
+      const st = conv.settings || null
+      const policy = st?.postingPolicy || 'ALL'
+      let allowedByPolicy = true
+      if (policy === 'LOGOPED_ONLY') {
+        allowedByPolicy = (myRole === 'ADMIN' || myRole === 'LOGOPED')
+      } else if (policy === 'RESTRICTED') {
+        // if restrictedJson present and has my id false => block
+        try {
+          const map = st?.restrictedJson as unknown
+          if (map && typeof map === 'object' && me in (map as Record<string, unknown>)) {
+            if ((map as Record<string, unknown>)[me] === false) allowedByPolicy = false
           }
-        }
-      } catch {}
-      return { __error: 'Отправка сообщений запрещена настройками группы' } as any
+        } catch {}
+      }
+      if (!canPostFlag || banned) return { __error: 'Отправка сообщений временно запрещена' } as any
+      if (!allowedByPolicy) {
+        // Fallback: если это родитель, перенаправим сообщение в персональный чат
+        try {
+          const u = await (prisma as any).user.findUnique({ where: { id: me }, select: { role: true } })
+          if ((u?.role as string | undefined) === 'PARENT') {
+            const targetUserId = (() => {
+              const parts = (conv.participants || []) as any[]
+              const admin = parts.find(p => (p.userId !== me) && ((p.role || '').toUpperCase() === 'ADMIN'))
+              if (admin) return admin.userId
+              const log = parts.find(p => (p.userId !== me) && ((p.role || '').toUpperCase() === 'LOGOPED'))
+              if (log) return log.userId
+              const other = parts.find(p => p.userId !== me)
+              return other?.userId as string | undefined
+            })()
+            if (targetUserId) {
+              let pconv = await prisma.conversation.findFirst({ where: { AND: [ { participants: { some: { userId: me } } }, { participants: { some: { userId: targetUserId } } } ] } })
+              if (!pconv) pconv = await prisma.conversation.create({ data: { participants: { create: [{ userId: me, role: 'MEMBER' }, { userId: targetUserId, role: 'MEMBER' }] } } })
+              await prisma.message.create({ data: { conversationId: pconv.id, authorId: me, body, replyToId: replyToId || null, type: type || 'TEXT', attachmentUrl: attachmentUrl || null } })
+              await prisma.conversation.update({ where: { id: pconv.id }, data: { updatedAt: new Date() } })
+              await prisma.conversationParticipant.update({ where: { conversationId_userId: { conversationId: pconv.id, userId: me } }, data: { lastReadAt: new Date() } })
+              return { rerouted: true, conversationId: String(pconv.id) }
+            }
+          }
+        } catch {}
+        return { __error: 'Отправка сообщений запрещена настройками группы' } as any
+      }
+      if (muted && (!params.type || params.type === 'TEXT')) return { __error: 'Вы временно в режиме mute' } as any
     }
-    if (muted && (!params.type || params.type === 'TEXT')) return { __error: 'Вы временно в режиме mute' } as any
-  }
-  // cleanup >30 days
-  const cutoff = new Date(Date.now() - 30*24*60*60*1000)
-  await prisma.message.deleteMany({ where: { conversationId: conv.id, createdAt: { lt: cutoff } } })
-  const msg = await prisma.message.create({ data: { conversationId: conv.id, authorId: me, body, replyToId: replyToId || null, type: type || 'TEXT', attachmentUrl: attachmentUrl || null } })
-  await prisma.conversation.update({ where: { id: conv.id }, data: { updatedAt: new Date() } })
-  await prisma.conversationParticipant.update({ where: { conversationId_userId: { conversationId: conv.id, userId: me } }, data: { lastReadAt: new Date() } })
-  revalidatePath('/chat')
-  revalidatePath(`/chat/${conv.id}`)
-  // Return strictly serializable payload
-  return {
-    id: String(msg.id),
-    conversationId: String(msg.conversationId),
-    authorId: String(msg.authorId),
-    body: String(msg.body),
-    type: (msg as any).type ? String((msg as any).type) : 'TEXT',
-    attachmentUrl: (msg as any).attachmentUrl ? String((msg as any).attachmentUrl) : null,
-    replyToId: msg.replyToId ? String(msg.replyToId) : null,
-    createdAt: new Date(msg.createdAt).toISOString(),
-    editedAt: msg.editedAt ? new Date(msg.editedAt).toISOString() : null,
-    deletedAt: msg.deletedAt ? new Date(msg.deletedAt).toISOString() : null,
+    // cleanup >30 days
+    const cutoff = new Date(Date.now() - 30*24*60*60*1000)
+    await prisma.message.deleteMany({ where: { conversationId: conv.id, createdAt: { lt: cutoff } } })
+    const msg = await prisma.message.create({ data: { conversationId: conv.id, authorId: me, body, replyToId: replyToId || null, type: type || 'TEXT', attachmentUrl: attachmentUrl || null } })
+    await prisma.conversation.update({ where: { id: conv.id }, data: { updatedAt: new Date() } })
+    await prisma.conversationParticipant.update({ where: { conversationId_userId: { conversationId: conv.id, userId: me } }, data: { lastReadAt: new Date() } })
+    return {
+      id: String(msg.id),
+      conversationId: String(msg.conversationId),
+      authorId: String(msg.authorId),
+      body: String(msg.body),
+      type: (msg as any).type ? String((msg as any).type) : 'TEXT',
+      attachmentUrl: (msg as any).attachmentUrl ? String((msg as any).attachmentUrl) : null,
+      replyToId: msg.replyToId ? String(msg.replyToId) : null,
+      createdAt: new Date(msg.createdAt).toISOString(),
+      editedAt: msg.editedAt ? new Date(msg.editedAt).toISOString() : null,
+      deletedAt: msg.deletedAt ? new Date(msg.deletedAt).toISOString() : null,
+    }
+  } catch (e) {
+    try { await prisma.auditLog.create({ data: { action: 'CHAT_SEND_SA_ERR', payload: String((e as any)?.message || e || 'error') } }) } catch {}
+    return { __error: 'Ошибка отправки. Попробуйте ещё раз.' } as any
   }
 }
 
