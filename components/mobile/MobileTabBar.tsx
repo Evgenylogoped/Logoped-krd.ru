@@ -1,7 +1,7 @@
 "use client"
 import React from "react"
 import Link from "next/link"
-import { useEffect, useState } from "react"
+import { useEffect, useState, useMemo } from "react"
 import { usePathname } from "next/navigation"
 
 export default function MobileTabBar({ role: roleProp, leaderFlag: leaderFlagProp }: { role?: string, leaderFlag?: boolean } = {}) {
@@ -20,14 +20,12 @@ export default function MobileTabBar({ role: roleProp, leaderFlag: leaderFlagPro
   }, [roleProp, roleState])
   const role = (roleProp ?? roleState) as any
   const R = (role || "").toUpperCase()
-  const isParent = R === "PARENT"
-  const isLogoped = R === "LOGOPED"
   const [mounted, setMounted] = useState(false)
   const [leaderFlag] = useState<boolean | null>(leaderFlagProp ?? null)
   const [moreOpen, setMoreOpen] = useState(false)
   const pathname = usePathname()
-  const [leaderApi, setLeaderApi] = React.useState<{ isOrgLeader: boolean; isBranchManager: boolean } | null>(null)
-  React.useEffect(() => {
+  const [leaderApi, setLeaderApi] = useState<{ isOrgLeader: boolean; isBranchManager: boolean } | null>(null)
+  useEffect(() => {
     let ignore = false
     ;(async () => {
       try {
@@ -41,6 +39,10 @@ export default function MobileTabBar({ role: roleProp, leaderFlag: leaderFlagPro
     })()
     return () => { ignore = true }
   }, [])
+
+  const isParent = R === "PARENT"
+  const isLogoped = R === "LOGOPED"
+
   useEffect(() => setMounted(true), [])
 
   // без дополнительных запросов — чтобы исключить перепрыгивания UI
