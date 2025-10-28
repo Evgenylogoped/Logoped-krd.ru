@@ -116,8 +116,8 @@ export async function deleteMessage(messageId: string) {
 
 export async function markReadOnFocus(conversationId: string) {
   const session = await getSessionSafe()
-  ensure(session)
-  const me = String((session!.user as { id?: string }).id || '')
+  if (!session?.user) return
+  const me = String((session.user as { id?: string }).id || '')
   await prisma.conversationParticipant.update({ where: { conversationId_userId: { conversationId, userId: me } }, data: { lastReadAt: new Date() } })
   revalidatePath('/chat')
 }
@@ -193,8 +193,8 @@ export async function listMessages(conversationId: string, sinceTs?: number) {
 
 export async function sendMessageAction(params: { conversationId?: string; targetUserId?: string; body: string; replyToId?: string | null; type?: string; attachmentUrl?: string | null }) {
   const session = await getSessionSafe()
-  ensure(session)
-  const me = String((session!.user as { id?: string }).id || '')
+  if (!session?.user) return { __error: 'Unauthorized' } as any
+  const me = String((session.user as { id?: string }).id || '')
   const { conversationId, targetUserId, body, replyToId, type, attachmentUrl } = params
   if ((!conversationId && !targetUserId) || !body) return { __error: 'Неверные параметры' } as any
   // find/create conversation
@@ -274,7 +274,7 @@ export async function sendMessageAction(params: { conversationId?: string; targe
             await prisma.conversationParticipant.update({ where: { conversationId_userId: { conversationId: pconv.id, userId: me } }, data: { lastReadAt: new Date() } })
             revalidatePath('/chat')
             revalidatePath(`/chat/${pconv.id}`)
-            return { rerouted: true, conversationId: pconv.id }
+            return { rerouted: true, conversationId: String(pconv.id) }
           }
         }
       } catch {}
@@ -290,20 +290,32 @@ export async function sendMessageAction(params: { conversationId?: string; targe
   await prisma.conversationParticipant.update({ where: { conversationId_userId: { conversationId: conv.id, userId: me } }, data: { lastReadAt: new Date() } })
   revalidatePath('/chat')
   revalidatePath(`/chat/${conv.id}`)
-  return msg
+  // Return strictly serializable payload
+  return {
+    id: String(msg.id),
+    conversationId: String(msg.conversationId),
+    authorId: String(msg.authorId),
+    body: String(msg.body),
+    type: (msg as any).type ? String((msg as any).type) : 'TEXT',
+    attachmentUrl: (msg as any).attachmentUrl ? String((msg as any).attachmentUrl) : null,
+    replyToId: msg.replyToId ? String(msg.replyToId) : null,
+    createdAt: new Date(msg.createdAt).toISOString(),
+    editedAt: msg.editedAt ? new Date(msg.editedAt).toISOString() : null,
+    deletedAt: msg.deletedAt ? new Date(msg.deletedAt).toISOString() : null,
+  }
 }
 
 export async function markRead(conversationId: string) {
   const session = await getSessionSafe()
-  ensure(session)
-  const me = String((session!.user as { id?: string }).id || '')
+  if (!session?.user) return
+  const me = String((session.user as { id?: string }).id || '')
   await prisma.conversationParticipant.update({ where: { conversationId_userId: { conversationId, userId: me } }, data: { lastReadAt: new Date() } })
 }
 
 export async function setTyping(conversationId: string, durationMs = 3000) {
   const session = await getSessionSafe()
-  ensure(session)
-  const me = String((session!.user as { id?: string }).id || '')
+  if (!session?.user) return Date.now()
+  const me = String((session.user as { id?: string }).id || '')
   const until = new Date(Date.now() + Math.min(10000, Math.max(1000, Number(durationMs))))
   await prisma.conversationParticipant.update({ where: { conversationId_userId: { conversationId, userId: me } }, data: { typingUntil: until } })
   return until.getTime()
