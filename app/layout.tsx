@@ -82,6 +82,7 @@ export default async function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: `try{(function(){if(typeof window==='undefined')return;var k='sw.purged.v1';if(window.sessionStorage&&sessionStorage.getItem(k))return;sessionStorage&&sessionStorage.setItem(k,'1');if('serviceWorker'in navigator){navigator.serviceWorker.getRegistrations().then(function(rs){rs.forEach(function(r){r.unregister().catch(function(){})})}).catch(function(){})}try{if(typeof caches!=='undefined'&&caches.keys){caches.keys().then(function(keys){return Promise.all(keys.map(function(x){return caches.delete(x)}))}).catch(function(){})}}catch(e){}})()}catch(e){}` }} />
         {/* iOS PWA fullscreen */}
         <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
         <meta name="apple-mobile-web-app-title" content="My Logoped" />
         <link rel="manifest" href="/manifest.json" />
