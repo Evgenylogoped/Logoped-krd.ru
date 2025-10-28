@@ -162,7 +162,7 @@ export default function DesktopSidebar({ role: roleProp, city: cityProp }: { rol
                 {/* Личные финансы доступны всем логопедам и лидерам */}
                 <Item href="/logoped/finance" icon={<Icon name="settings" />} label="Лич. финансы" collapsed={!pinned} />
                 {/* Организационные финансы обычного логопеда */}
-                {inOrg && !isLeader && (
+                {leaderApi && inOrg && !isLeader && (
                   <div className="relative">
                     <Item href="/logoped/org-finance" icon={<Icon name="settings" />} label="Лог. финансы" collapsed={!pinned} />
                     <div className="absolute top-1 right-2">
@@ -171,7 +171,7 @@ export default function DesktopSidebar({ role: roleProp, city: cityProp }: { rol
                   </div>
                 )}
                 {/* Финансы руководителя/владельца */}
-                {isLeader && (
+                {leaderApi && isLeader && (
                   <div className="relative">
                     <Item href="/logoped/branch-finance" icon={<Icon name="settings" />} label="Рук. финансы" collapsed={!pinned} />
                     <div className="absolute top-1 right-2">
