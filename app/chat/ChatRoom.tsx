@@ -300,7 +300,7 @@ let typingLabel = typingUsers.length > 0 ? 'Печатает...' : ''
               Файл
               <input type="file" className="hidden" onChange={onPickFile} name="file" id="chat-file" />
             </label>
-            <button disabled={loading} className="btn btn-primary">{editId ? 'Сохранить' : 'Отправить'}</button>
+            <button type="submit" disabled={loading} className="btn btn-primary" onClick={()=>{ try{ console.log('[chat] click send') }catch{} }}>{editId ? 'Сохранить' : 'Отправить'}</button>
           </div>
           <div className="flex flex-col gap-2">
             <div className="flex gap-2 items-center">
