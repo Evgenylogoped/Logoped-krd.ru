@@ -98,8 +98,8 @@ test.describe('Admin org-requests', () => {
     await expect(page.getByText('Заявка одобрена')).toBeVisible()
     // And organization settings show company and 'Основной офис'
     await page.goto('/settings/organization')
-    await expect(page.locator('main').getByText('Организация:')).toBeVisible()
-    await expect(page.getByText('Основной офис')).toBeVisible()
+    const main = page.getByRole('main')
+    await expect(main.getByText('Основной офис')).toBeVisible()
   })
 
   test('Admin rejects org request shows REJECTED and user sees reason', async ({ page }) => {

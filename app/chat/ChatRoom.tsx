@@ -116,9 +116,27 @@ export default function ChatRoom({ conversationId, selfId, initialMessages, chil
         const tempId = `temp-${Date.now()}`
         const optimistic: Message = { id: tempId, conversationId, authorId: selfId, body: text || (type!=='TEXT' ? (type==='IMAGE'?'[Изображение]': type==='VIDEO'?'[Видео]': type==='AUDIO'?'[Аудио]': type==='PDF'?'[PDF]':'[Файл]') : ''), createdAt: new Date().toISOString(), replyToId: replyTo?.id || null, type, attachmentUrl: url || null }
         setMessages(prev => [...prev, optimistic])
-        const saved = await sendMessageAction({ conversationId, body: optimistic.body, replyToId: optimistic.replyToId || null, type: optimistic.type, attachmentUrl: optimistic.attachmentUrl || null })
-        // заменить оптимистическое сообщение на реальное БЕЗ изменения позиции/времени
-        setMessages(prev => prev.map(m => m.id === tempId ? ({ ...(saved as any), createdAt: optimistic.createdAt }) : m))
+        try {
+          const saved = await sendMessageAction({ conversationId, body: optimistic.body, replyToId: optimistic.replyToId || null, type: optimistic.type, attachmentUrl: optimistic.attachmentUrl || null })
+          // обработка структурной ошибки без исключения
+          if (saved && (saved as any).__error) {
+            setMessages(prev => prev.filter(m => m.id !== tempId))
+            if (typeof window !== 'undefined') {
+              window.alert(String((saved as any).__error || 'Не удалось отправить сообщение'))
+            }
+            return
+          }
+          // заменить оптимистическое сообщение на реальное БЕЗ изменения позиции/времени
+          setMessages(prev => prev.map(m => m.id === tempId ? ({ ...(saved as any), createdAt: optimistic.createdAt }) : m))
+        } catch (err) {
+          // откат оптимистического сообщения на ошибке
+          setMessages(prev => prev.filter(m => m.id !== tempId))
+          const msg = (err && typeof err === 'object' && 'message' in err) ? String((err as any).message || '') : String(err || '')
+          if (typeof window !== 'undefined') {
+            window.alert(msg || 'Не удалось отправить сообщение. Проверьте доступ и попробуйте ещё раз.')
+          }
+          return
+        }
       }
       setInput('')
       setAttachUrl('')

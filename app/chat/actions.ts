@@ -32,7 +32,9 @@ async function ensureChatAllowed(userId: string) {
   const allowed = Boolean(limits.chat?.enabled)
   if (!allowed) {
     try { await prisma.auditLog.create({ data: { action: 'PLAN_LIMIT_BLOCK', payload: JSON.stringify({ kind: 'chat', userId, plan }) } }) } catch {}
-    redirect('/settings/billing?quota=chat')
+    // Внутри server actions redirect() приводит к 500 при вызове из клиента.
+    // Бросаем контролируемую ошибку — клиент поймает и покажет сообщение.
+    throw new Error('Чат недоступен: ограничение плана. Перейдите в настройки тарифа.')
   }
 }
 
@@ -194,7 +196,7 @@ export async function sendMessageAction(params: { conversationId?: string; targe
   ensure(session)
   const me = String((session!.user as { id?: string }).id || '')
   const { conversationId, targetUserId, body, replyToId, type, attachmentUrl } = params
-  if ((!conversationId && !targetUserId) || !body) throw new Error('Неверные параметры')
+  if ((!conversationId && !targetUserId) || !body) return { __error: 'Неверные параметры' } as any
   // find/create conversation
   let conv: {
     id: string
@@ -212,10 +214,15 @@ export async function sendMessageAction(params: { conversationId?: string; targe
     })
     if (!conv) conv = await prisma.conversation.create({ data: { participants: { create: [{ userId: me, role: 'MEMBER' }, { userId: other, role: 'MEMBER' }] } } })
   }
-  if (!conv) throw new Error('Чат недоступен')
+  if (!conv) return { __error: 'Чат недоступен' } as any
 
-  // Базовая проверка подписки на отправку сообщений
-  await ensureChatAllowed(me)
+  // Базовая проверка подписки на отправку сообщений — без выброса в 500
+  try {
+    await ensureChatAllowed(me)
+  } catch (e) {
+    const msg = (e && typeof e === 'object' && 'message' in e) ? String((e as any).message || '') : 'Чат недоступен'
+    return { __error: msg } as any
+  }
   // Policy enforcement for group chats
   const isGroup = typeof conv.title === 'string' && conv.title.startsWith('group:')
   if (isGroup) {
@@ -242,7 +249,7 @@ export async function sendMessageAction(params: { conversationId?: string; targe
         }
       } catch {}
     }
-    if (!canPostFlag || banned) throw new Error('Отправка сообщений временно запрещена')
+    if (!canPostFlag || banned) return { __error: 'Отправка сообщений временно запрещена' } as any
     if (!allowedByPolicy) {
       // Fallback: если это родитель, перенаправим сообщение в персональный чат с логопедом/админом
       try {
@@ -271,9 +278,9 @@ export async function sendMessageAction(params: { conversationId?: string; targe
           }
         }
       } catch {}
-      throw new Error('Отправка сообщений запрещена настройками группы')
+      return { __error: 'Отправка сообщений запрещена настройками группы' } as any
     }
-    if (muted && (!params.type || params.type === 'TEXT')) throw new Error('Вы временно в режиме mute')
+    if (muted && (!params.type || params.type === 'TEXT')) return { __error: 'Вы временно в режиме mute' } as any
   }
   // cleanup >30 days
   const cutoff = new Date(Date.now() - 30*24*60*60*1000)
