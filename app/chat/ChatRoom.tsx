@@ -105,7 +105,7 @@ export default function ChatRoom({ conversationId, selfId, initialMessages, chil
     const text = input.trim()
     const url = attachUrl.trim()
     if (!text && !url) return
-    try { console.debug('[chat] onSend start', { conversationId, hasText: !!text, hasAttach: !!url }) } catch {}
+    try { console.log('[chat] onSend start', { conversationId, hasText: !!text, hasAttach: !!url }) } catch {}
     setLoading(true)
     try {
       if (editId) {
@@ -118,18 +118,18 @@ export default function ChatRoom({ conversationId, selfId, initialMessages, chil
         const optimistic: Message = { id: tempId, conversationId, authorId: selfId, body: text || (type!=='TEXT' ? (type==='IMAGE'?'[Изображение]': type==='VIDEO'?'[Видео]': type==='AUDIO'?'[Аудио]': type==='PDF'?'[PDF]':'[Файл]') : ''), createdAt: new Date().toISOString(), replyToId: replyTo?.id || null, type, attachmentUrl: url || null }
         setMessages(prev => [...prev, optimistic])
         try {
-          try { console.debug('[chat] send fetch → /api/chat/send', { conversationId }) } catch {}
+          try { console.log('[chat] send fetch → /api/chat/send', { conversationId }) } catch {}
           const r = await fetch('/api/chat/send', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ conversationId, body: optimistic.body, replyToId: optimistic.replyToId || null }),
             credentials: 'include',
           })
-          try { console.debug('[chat] send response', r.status) } catch {}
+          try { console.log('[chat] send response', r.status) } catch {}
           if (!r.ok) {
             setMessages(prev => prev.filter(m => m.id !== tempId))
             const txt = await r.text().catch(()=> '')
-            try { console.debug('[chat] send failed', { status: r.status, text: txt.slice(0,200) }) } catch {}
+            try { console.log('[chat] send failed', { status: r.status, text: txt.slice(0,200) }) } catch {}
             if (typeof window !== 'undefined') window.alert(txt || 'Не удалось отправить сообщение')
             return
           }
@@ -141,7 +141,7 @@ export default function ChatRoom({ conversationId, selfId, initialMessages, chil
           // откат оптимистического сообщения на ошибке
           setMessages(prev => prev.filter(m => m.id !== tempId))
           const msg = (err && typeof err === 'object' && 'message' in err) ? String((err as any).message || '') : String(err || '')
-          try { console.debug('[chat] send exception', msg) } catch {}
+          try { console.log('[chat] send exception', msg) } catch {}
           if (typeof window !== 'undefined') {
             window.alert(msg || 'Не удалось отправить сообщение. Проверьте доступ и попробуйте ещё раз.')
           }
