@@ -31,6 +31,7 @@ export default function ChatRoom({ conversationId, selfId, initialMessages, chil
   const bottomRef = useRef<HTMLDivElement>(null)
   const sinceRef = useRef<number>(initialMessages.length ? new Date(initialMessages[initialMessages.length - 1].createdAt).getTime() : 0)
   const [ctx, setCtx] = useState<{ open: boolean; x: number; y: number; msg?: Message | null }>({ open: false, x: 0, y: 0, msg: null })
+  const [sendDiag, setSendDiag] = useState<string>('')
 
   useEffect(() => { scrollToBottom() }, [])
   useEffect(() => { scrollToBottom() }, [messages])
@@ -106,6 +107,10 @@ export default function ChatRoom({ conversationId, selfId, initialMessages, chil
     const url = attachUrl.trim()
     if (!text && !url) return
     try { console.log('[chat] onSend start', { conversationId, hasText: !!text, hasAttach: !!url }) } catch {}
+    try {
+      const hasSess = /next-auth\.session-token|__Secure-next-auth\.session-token/.test(document.cookie)
+      setSendDiag(`sending… cookies:${hasSess ? 'yes' : 'no'}`)
+    } catch { setSendDiag('sending… cookies:unknown') }
     setLoading(true)
     try {
       if (editId) {
@@ -119,17 +124,19 @@ export default function ChatRoom({ conversationId, selfId, initialMessages, chil
         setMessages(prev => [...prev, optimistic])
         try {
           try { console.log('[chat] send fetch → /api/chat/send', { conversationId }) } catch {}
-          const r = await fetch('/api/chat/send', {
+          const r = await fetch(`/api/chat/send?ts=${Date.now()}` as string, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ conversationId, body: optimistic.body, replyToId: optimistic.replyToId || null }),
             credentials: 'include',
           })
           try { console.log('[chat] send response', r.status) } catch {}
+          try { setSendDiag(`status:${r.status} hdr:${r.headers.get('x-chat-auth-debug')||''}`) } catch {}
           if (!r.ok) {
             setMessages(prev => prev.filter(m => m.id !== tempId))
             const txt = await r.text().catch(()=> '')
             try { console.log('[chat] send failed', { status: r.status, text: txt.slice(0,200) }) } catch {}
+            try { setSendDiag(prev => `${prev} text:${(txt||'').slice(0,120)}`) } catch {}
             if (typeof window !== 'undefined') window.alert(txt || 'Не удалось отправить сообщение')
             return
           }
@@ -141,7 +148,7 @@ export default function ChatRoom({ conversationId, selfId, initialMessages, chil
           // откат оптимистического сообщения на ошибке
           setMessages(prev => prev.filter(m => m.id !== tempId))
           const msg = (err && typeof err === 'object' && 'message' in err) ? String((err as any).message || '') : String(err || '')
-          try { console.log('[chat] send exception', msg) } catch {}
+          try { console.log('[chat] send exception', msg); setSendDiag(`exception:${msg}`) } catch {}
           if (typeof window !== 'undefined') {
             window.alert(msg || 'Не удалось отправить сообщение. Проверьте доступ и попробуйте ещё раз.')
           }
@@ -278,6 +285,7 @@ let typingLabel = typingUsers.length > 0 ? 'Печатает...' : ''
         <div ref={bottomRef} />
       </div>
       <div className="border-t p-2" >
+        {sendDiag && (<div className="text-[11px] opacity-70 mb-1">{sendDiag}</div>)}
         {replyTo && (
           <div className="mb-2 text-xs border rounded p-2 flex items-center justify-between" style={{ background: 'var(--card-bg)' }}>
             <div>
