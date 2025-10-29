@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
       }, 0)
       await (prisma as any).payoutRequest.update({ where: { id: (existing as any).id }, data: { finalAmount: finalOld } })
     } catch {}
-    return NextResponse.redirect(new URL('/logoped/org-finance?pending=1', req.url), 303)
+    return NextResponse.redirect('/logoped/org-finance?pending=1', 303)
   }
 
   // Считаем сумму заявки по урокам: settledAt != null, payoutStatus='NONE', не персональные
@@ -116,5 +116,5 @@ export async function POST(req: NextRequest) {
     }
   })
 
-  return NextResponse.redirect(new URL('/logoped/org-finance?sent=1', req.url), 303)
+  return NextResponse.redirect('/logoped/org-finance?sent=1', 303)
 }
