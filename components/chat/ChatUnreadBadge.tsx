@@ -6,18 +6,29 @@ export default function ChatUnreadBadge({ className }: { className?: string }) {
 
   React.useEffect(() => {
     let es: EventSource | null = null
-    let pollTimer: ReturnType<typeof setInterval> | null = null
-    function startPolling(interval = 15000) {
-      async function load() {
-        try {
-          const res = await fetch('/api/chat/unread', { cache: 'no-store' })
-          const json = await res.json()
-          setCount(Number(json?.unread || 0))
-        } catch {}
-      }
-      load()
-      pollTimer = setInterval(load, interval)
+    let pollTimer: ReturnType<typeof setTimeout> | null = null
+    async function load() {
+      try {
+        const res = await fetch('/api/chat/unread', { cache: 'no-store' })
+        const json = await res.json()
+        setCount(Number(json?.unread || 0))
+      } catch {}
     }
+    // Экспоненциальный бэкофф для резервного опроса при падении SSE
+    let backoffMs = 15000
+    const maxBackoffMs = 120000
+    const schedulePoll = () => {
+      if (pollTimer) clearTimeout(pollTimer)
+      pollTimer = setTimeout(async () => {
+        await load()
+        backoffMs = Math.min(maxBackoffMs, Math.round(backoffMs * 1.7))
+        schedulePoll()
+      }, backoffMs)
+    }
+
+    // Мгновенно получаем текущее значение
+    load()
+
     try {
       es = new EventSource('/api/chat/unread/stream')
       es.addEventListener('unread', (e: MessageEvent) => {
@@ -28,14 +39,20 @@ export default function ChatUnreadBadge({ className }: { className?: string }) {
       })
       es.onerror = () => {
         if (es) { es.close(); es = null }
-        if (!pollTimer) startPolling(12000)
+        // запускаем резервный опрос с бэкофом
+        schedulePoll()
       }
-    } catch {
-      startPolling(15000)
-    }
+    } catch {}
+    // Обновляем при возврате фокуса/видимости
+    const onFocus = () => { load() }
+    const onVis = () => { if (document.visibilityState === 'visible') load() }
+    window.addEventListener('focus', onFocus)
+    document.addEventListener('visibilitychange', onVis)
     return () => {
       if (es) es.close()
-      if (pollTimer) clearInterval(pollTimer)
+      if (pollTimer) clearTimeout(pollTimer)
+      window.removeEventListener('focus', onFocus)
+      document.removeEventListener('visibilitychange', onVis)
     }
   }, [])
 
