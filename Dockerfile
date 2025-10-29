@@ -25,12 +25,14 @@ RUN bash -lc 'set -e; i=0; until [ $i -ge 5 ]; do npm ci --no-audit --no-fund &&
 COPY . .
 # Контролируемая генерация Prisma (без постустановочных зависаний)
 ENV PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1
-# RUN npx prisma generate
+# Генерируем Prisma Client явно (без постинсталл хуков)
+RUN npx prisma generate || true
 RUN npm rebuild sharp --unsafe-perm || true
 RUN npm rebuild lightningcss --unsafe-perm || true
 # Сборка Next (санитайз CSS-комментариев + отключение cssnano)
 RUN find /app -type f -name '*.css' -print0 | xargs -0 -I{} sed -i -E 's@^[[:space:]]*//.*$@@' "{}"
-# RUN NODE_ENV=production NEXT_DISABLE_OPTIMIZED_CSS=1 NEXT_TELEMETRY_DISABLED=1 npm run build
+# Собираем Next.js (нужны артефакты /.next для рантайм-образа)
+RUN NODE_ENV=production NEXT_DISABLE_OPTIMIZED_CSS=1 NEXT_TELEMETRY_DISABLED=1 npm run build
 
 FROM node:${NODE_VERSION}-bullseye-slim AS runner
 WORKDIR /app
