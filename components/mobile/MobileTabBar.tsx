@@ -11,19 +11,16 @@ import { usePathname } from "next/navigation"
 
 export default function MobileTabBar({ role: roleProp, leaderFlag: leaderFlagProp }: { role?: string, leaderFlag?: boolean } = {}) {
   // Стабильный источник роли — пропсы от сервера; при отсутствии подстраховываемся фетчем
-  const [roleState, setRoleState] = useState<string | undefined>(typeof roleProp === 'string' ? roleProp : undefined)
+  const [roleState, setRoleState] = useState<string | undefined>(undefined)
   useEffect(() => {
-    if (!roleProp) {
-      fetch('/api/auth/session')
-        .then(r => r.ok ? r.json() : null)
-        .then(d => {
-          const r = d?.user?.role
-          if (typeof r === 'string' && !roleState) setRoleState(r)
-        })
-        .catch(() => {})
-    }
-  }, [roleProp, roleState])
-  const role = (roleProp ?? roleState) as any
+    fetch('/api/me')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (d && typeof d.role === 'string') setRoleState(String(d.role))
+      })
+      .catch(()=>{})
+  }, [])
+  const role = (roleState ?? roleProp) as any
   const R = (role || "").toUpperCase()
   const [mounted, setMounted] = useState(false)
   const [leaderFlag] = useState<boolean | null>(leaderFlagProp ?? null)
@@ -47,17 +44,17 @@ export default function MobileTabBar({ role: roleProp, leaderFlag: leaderFlagPro
 
   const isParent = R === "PARENT"
   const isLogoped = R === "LOGOPED"
-  const isAdminLike = ['ADMIN','SUPER_ADMIN','ACCOUNTANT','SUPERVISOR','OWNER','LEADER','MANAGER','ORGANIZER'].includes(R)
+  const isAdminLike = ['ADMIN','SUPER_ADMIN','ACCOUNTANT','SUPERVISOR','OWNER'].includes(R)
 
   useEffect(() => setMounted(true), [])
 
   // без дополнительных запросов — чтобы исключить перепрыгивания UI
     if (!mounted) return null
 
-  const showLeader = (leaderFlag === true)
-    || (leaderFlag === null && (isAdminLike || leaderApi?.isOrgLeader || leaderApi?.isBranchManager) && !isParent)
-  const showLogoped = !showLeader && isLogoped
-  const showParent = !showLeader && !showLogoped && isParent
+  const showAdmin = isAdminLike && !isParent
+  const showLeader = !showAdmin && ((leaderFlag === true) || (leaderFlag === null && (leaderApi?.isOrgLeader || leaderApi?.isBranchManager) && !isParent))
+  const showLogoped = !showAdmin && !showLeader && isLogoped
+  const showParent = !showAdmin && !showLeader && !showLogoped && isParent
 
   const wrapClass = "fixed bottom-0 inset-x-0 z-20 border-t md:hidden"
   const commonClass = "flex flex-col items-center justify-center gap-1 py-2 text-[11px] rounded-xl border text-muted hover:bg-gray-50 active:scale-[0.98] transition relative"
@@ -69,7 +66,7 @@ export default function MobileTabBar({ role: roleProp, leaderFlag: leaderFlagPro
 
   function MenuPanel(){
     const sections: { title: string, items: { href: string, label: string; key?: string }[] }[] = []
-    if (showLeader) {
+    if (showLeader || showAdmin) {
       const leaderTitle = (R==='SUPER_ADMIN' || R==='ADMIN' || R==='ACCOUNTANT') ? 'Админ' : 'Рук. финансы'
       sections.push({ title: leaderTitle, items: [
         { href: '/logoped/finance', label: 'Лич. финансы' },
@@ -129,12 +126,12 @@ export default function MobileTabBar({ role: roleProp, leaderFlag: leaderFlagPro
                   <Link key={m.href} href={m.href} className="btn relative" onClick={() => setMoreOpen(false)}>
                     <span>{m.label}</span>
                     {showLeader && m.key==='payouts' && (
-                      <span className="absolute -top-1 -right-1">
+                      <span className="absolute top-1 right-2 z-10">
                         <PayoutsPendingBadge />
                       </span>
                     )}
                     {showLogoped && m.key==='orgfin' && (
-                      <span className="absolute -top-1 -right-1">
+                      <span className="absolute top-1 right-2 z-10">
                         <LogopedOrgFinanceBadge />
                       </span>
                     )}
@@ -153,12 +150,40 @@ export default function MobileTabBar({ role: roleProp, leaderFlag: leaderFlagPro
     <>
       <div data-role={R} className={wrapClass} style={{ background: 'color-mix(in oklab, var(--background) 95%, transparent)', backdropFilter: 'blur(8px)' }}>
         <div className={`grid grid-cols-5`}>
+          {showAdmin && (
+            <>
+              <Link href="/chat" className={linkClass('/chat')}>
+                <span aria-hidden className="text-[18px] leading-none">💬</span>
+                <span>Чат</span>
+                <span className="absolute top-0 right-1 z-10">
+                  <ChatUnreadBadge />
+                </span>
+              </Link>
+              <Link href="/admin/users" className={linkClass('/admin/users')}>
+                <span aria-hidden className="text-[18px] leading-none">👤</span>
+                <span>Пользов.</span>
+              </Link>
+              <Link href="/admin/clients" className={linkClass('/admin/clients')}>
+                <span aria-hidden className="text-[18px] leading-none">👪</span>
+                <span>Клиенты</span>
+              </Link>
+              <Link href="/admin/logopeds" className={linkClass('/admin/logopeds')}>
+                <span aria-hidden className="text-[18px] leading-none">🧑‍⚕️</span>
+                <span>Логопеды</span>
+              </Link>
+              <button className={commonClass + ' relative'} onClick={()=>setMoreOpen(true)}>
+                <span aria-hidden className="text-[18px] leading-none">⋯</span>
+                <span>Меню</span>
+              </button>
+            </>
+          )}
+
           {showLeader && (
             <>
               <Link href="/logoped/schedule" className={linkClass('/logoped/schedule')}>
                 <span aria-hidden className="text-[18px] leading-none">📅</span>
                 <span>Расписание</span>
-                <span className="absolute -top-1 right-2">
+                <span className="absolute top-0 right-1 z-10">
                   <SchedulePendingBadge />
                 </span>
               </Link>
@@ -169,21 +194,21 @@ export default function MobileTabBar({ role: roleProp, leaderFlag: leaderFlagPro
               <Link href="/logoped/notifications" className={linkClass('/logoped/notifications')}>
                 <span aria-hidden className="text-[18px] leading-none">🔔</span>
                 <span>Уведомл.</span>
-                <span className="absolute -top-1 right-2">
+                <span className="absolute top-0 right-1 z-10">
                   <NotificationsBadge />
                 </span>
               </Link>
               <Link href="/chat" className={linkClass('/chat')}>
                 <span aria-hidden className="text-[18px] leading-none">💬</span>
                 <span>Чат</span>
-                <span className="absolute -top-1 right-2">
+                <span className="absolute top-0 right-1 z-10">
                   <ChatUnreadBadge />
                 </span>
               </Link>
               <button className={commonClass + ' relative'} onClick={()=>setMoreOpen(true)}>
                 <span aria-hidden className="text-[18px] leading-none">⋯</span>
                 <span>Меню</span>
-                <span className="absolute -top-1 right-2">
+                <span className="absolute top-0 right-1 z-10">
                   <PayoutsPendingBadge />
                 </span>
               </button>
@@ -220,7 +245,7 @@ export default function MobileTabBar({ role: roleProp, leaderFlag: leaderFlagPro
               <button className={commonClass + ' relative'} onClick={()=>setMoreOpen(true)}>
                 <span aria-hidden className="text-[18px] leading-none">⋯</span>
                 <span>Меню</span>
-                <span className="absolute -top-1 right-2">
+                <span className="absolute top-0 right-1 z-10">
                   <LogopedOrgFinanceBadge />
                 </span>
               </button>
