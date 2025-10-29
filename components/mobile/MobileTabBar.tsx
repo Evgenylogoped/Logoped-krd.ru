@@ -66,9 +66,36 @@ export default function MobileTabBar({ role: roleProp, leaderFlag: leaderFlagPro
 
   function MenuPanel(){
     const sections: { title: string, items: { href: string, label: string; key?: string }[] }[] = []
-    if (showLeader || showAdmin) {
-      const leaderTitle = (R==='SUPER_ADMIN' || R==='ADMIN' || R==='ACCOUNTANT') ? 'Админ' : 'Рук. финансы'
-      sections.push({ title: leaderTitle, items: [
+    if (showAdmin) {
+      sections.push({ title: 'Админ', items: [
+        { href: '/admin/organizations', label: 'Организации' },
+        { href: '/admin/branches', label: 'Филиалы' },
+        { href: '/admin/groups', label: 'Группы' },
+        { href: '/admin/logopeds', label: 'Логопеды' },
+        { href: '/admin/clients', label: 'Клиенты' },
+        { href: '/admin/org-requests', label: 'Заявки' },
+        { href: '/admin/users', label: 'Пользователи' },
+        { href: '/admin/payments', label: 'Платежи' },
+        { href: '/admin/finance', label: 'Финансы' },
+        { href: '/admin/audit', label: 'Аудит' },
+        { href: '/admin/search', label: 'Поиск' },
+        { href: '/admin/vip', label: 'VIP' },
+        { href: '/admin/subscriptions', label: 'Подписки' },
+        { href: '/admin/subscriptions/requests', label: '· Заявки на смену' },
+        { href: '/admin/subscriptions/limit-requests', label: '· Лимит‑заявки' },
+        ...(R==='SUPER_ADMIN' ? [
+          { href: '/admin/backups', label: 'Бэкапы' },
+          { href: '/admin/system/gui', label: 'Системное администрирование' },
+        ] : []),
+        { href: '/admin/tools/purge', label: 'Очистка' },
+      ]})
+      sections.push({ title: 'Настройки', items: [
+        { href: '/settings/profile', label: 'Профиль' },
+        { href: '/settings/password', label: 'Пароль' },
+        { href: '/settings/billing', label: 'Подписка' },
+      ]})
+    } else if (showLeader) {
+      sections.push({ title: 'Рук. финансы', items: [
         { href: '/logoped/finance', label: 'Лич. финансы' },
         { href: '/admin/finance/dashboard', label: 'Дашборд' },
         { href: '/admin/finance/children', label: 'Дети' },
