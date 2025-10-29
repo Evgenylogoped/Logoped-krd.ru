@@ -2,6 +2,8 @@
 import React from "react"
 import Link from "next/link"
 import { useEffect, useState, useMemo } from "react"
+import PayoutsPendingBadge from "@/components/finance/PayoutsPendingBadge"
+import LogopedOrgFinanceBadge from "@/components/finance/LogopedOrgFinanceBadge"
 import { usePathname } from "next/navigation"
 
 export default function MobileTabBar({ role: roleProp, leaderFlag: leaderFlagProp }: { role?: string, leaderFlag?: boolean } = {}) {
@@ -42,13 +44,15 @@ export default function MobileTabBar({ role: roleProp, leaderFlag: leaderFlagPro
 
   const isParent = R === "PARENT"
   const isLogoped = R === "LOGOPED"
+  const isAdminLike = ['ADMIN','SUPER_ADMIN','ACCOUNTANT','SUPERVISOR','OWNER','LEADER','MANAGER','ORGANIZER'].includes(R)
 
   useEffect(() => setMounted(true), [])
 
   // без дополнительных запросов — чтобы исключить перепрыгивания UI
     if (!mounted) return null
 
-  const showLeader = (leaderFlag === true) || (leaderFlag === null && (leaderApi?.isOrgLeader || leaderApi?.isBranchManager) && !isParent)
+  const showLeader = (leaderFlag === true)
+    || (leaderFlag === null && (isAdminLike || leaderApi?.isOrgLeader || leaderApi?.isBranchManager) && !isParent)
   const showLogoped = !showLeader && isLogoped
   const showParent = !showLeader && !showLogoped && isParent
 
@@ -61,13 +65,13 @@ export default function MobileTabBar({ role: roleProp, leaderFlag: leaderFlagPro
   }
 
   function MenuPanel(){
-    const sections: { title: string, items: { href: string, label: string }[] }[] = []
+    const sections: { title: string, items: { href: string, label: string; key?: string }[] }[] = []
     if (showLeader) {
       sections.push({ title: 'Рук. финансы', items: [
         { href: '/logoped/finance', label: 'Лич. финансы' },
         { href: '/admin/finance/dashboard', label: 'Дашборд' },
         { href: '/admin/finance/children', label: 'Дети' },
-        { href: '/admin/finance/payouts', label: 'Выплаты' },
+        { href: '/admin/finance/payouts', label: 'Выплаты', key: 'payouts' },
         { href: '/admin/finance/passes', label: 'Абонемент' },
         { href: '/admin/finance/statistics', label: 'Статистика' },
         { href: '/admin/finance/archive', label: 'Архив' },
@@ -118,8 +122,13 @@ export default function MobileTabBar({ role: roleProp, leaderFlag: leaderFlagPro
               <div className="text-xs text-muted">{sec.title}</div>
               <div className="grid grid-cols-2 gap-2 text-sm">
                 {sec.items.map((m)=> (
-                  <Link key={m.href} href={m.href} className="btn" onClick={() => setMoreOpen(false)}>
-                    {m.label}
+                  <Link key={m.href} href={m.href} className="btn relative" onClick={() => setMoreOpen(false)}>
+                    <span>{m.label}</span>
+                    {showLeader && m.key==='payouts' && (
+                      <span className="absolute -top-1 -right-1">
+                        <PayoutsPendingBadge />
+                      </span>
+                    )}
                   </Link>
                 ))}
               </div>
@@ -153,9 +162,12 @@ export default function MobileTabBar({ role: roleProp, leaderFlag: leaderFlagPro
                 <span aria-hidden className="text-[18px] leading-none">💬</span>
                 <span>Чат</span>
               </Link>
-              <button className={commonClass} onClick={()=>setMoreOpen(true)}>
+              <button className={commonClass + ' relative'} onClick={()=>setMoreOpen(true)}>
                 <span aria-hidden className="text-[18px] leading-none">⋯</span>
                 <span>Меню</span>
+                <span className="absolute -top-1 right-2">
+                  <PayoutsPendingBadge />
+                </span>
               </button>
             </>
           )}
