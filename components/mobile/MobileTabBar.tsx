@@ -4,6 +4,9 @@ import Link from "next/link"
 import { useEffect, useState, useMemo } from "react"
 import PayoutsPendingBadge from "@/components/finance/PayoutsPendingBadge"
 import LogopedOrgFinanceBadge from "@/components/finance/LogopedOrgFinanceBadge"
+import ChatUnreadBadge from "@/components/chat/ChatUnreadBadge"
+import NotificationsBadge from "@/components/notifications/NotificationsBadge"
+import SchedulePendingBadge from "@/components/schedule/SchedulePendingBadge"
 import { usePathname } from "next/navigation"
 
 export default function MobileTabBar({ role: roleProp, leaderFlag: leaderFlagProp }: { role?: string, leaderFlag?: boolean } = {}) {
@@ -57,7 +60,7 @@ export default function MobileTabBar({ role: roleProp, leaderFlag: leaderFlagPro
   const showParent = !showLeader && !showLogoped && isParent
 
   const wrapClass = "fixed bottom-0 inset-x-0 z-20 border-t md:hidden"
-  const commonClass = "flex flex-col items-center justify-center gap-1 py-2 text-[11px] rounded-xl border text-muted hover:bg-gray-50 active:scale-[0.98] transition"
+  const commonClass = "flex flex-col items-center justify-center gap-1 py-2 text-[11px] rounded-xl border text-muted hover:bg-gray-50 active:scale-[0.98] transition relative"
   const activeClass = "text-blue-800 font-extrabold border-blue-700 bg-blue-100 ring-2 ring-blue-300 shadow"
   function linkClass(href: string){
     const ok = pathname && (pathname===href || pathname.startsWith(href+'/'))
@@ -67,7 +70,8 @@ export default function MobileTabBar({ role: roleProp, leaderFlag: leaderFlagPro
   function MenuPanel(){
     const sections: { title: string, items: { href: string, label: string; key?: string }[] }[] = []
     if (showLeader) {
-      sections.push({ title: 'Рук. финансы', items: [
+      const leaderTitle = (R==='SUPER_ADMIN' || R==='ADMIN' || R==='ACCOUNTANT') ? 'Админ' : 'Рук. финансы'
+      sections.push({ title: leaderTitle, items: [
         { href: '/logoped/finance', label: 'Лич. финансы' },
         { href: '/admin/finance/dashboard', label: 'Дашборд' },
         { href: '/admin/finance/children', label: 'Дети' },
@@ -91,7 +95,7 @@ export default function MobileTabBar({ role: roleProp, leaderFlag: leaderFlagPro
     } else if (showLogoped) {
       sections.push({ title: 'Финансы', items: [
         { href: '/logoped/finance', label: 'Лич. финансы' },
-        { href: '/logoped/org-finance', label: 'Лог. финансы' },
+        { href: '/logoped/org-finance', label: 'Лог. финансы', key: 'orgfin' },
       ]})
       sections.push({ title: 'Настройки', items: [
         { href: '/settings/profile', label: 'Профиль' },
@@ -129,6 +133,11 @@ export default function MobileTabBar({ role: roleProp, leaderFlag: leaderFlagPro
                         <PayoutsPendingBadge />
                       </span>
                     )}
+                    {showLogoped && m.key==='orgfin' && (
+                      <span className="absolute -top-1 -right-1">
+                        <LogopedOrgFinanceBadge />
+                      </span>
+                    )}
                   </Link>
                 ))}
               </div>
@@ -149,6 +158,9 @@ export default function MobileTabBar({ role: roleProp, leaderFlag: leaderFlagPro
               <Link href="/logoped/schedule" className={linkClass('/logoped/schedule')}>
                 <span aria-hidden className="text-[18px] leading-none">📅</span>
                 <span>Расписание</span>
+                <span className="absolute -top-1 right-2">
+                  <SchedulePendingBadge />
+                </span>
               </Link>
               <Link href="/logoped/clients" className={linkClass('/logoped/clients')}>
                 <span aria-hidden className="text-[18px] leading-none">👥</span>
@@ -157,10 +169,16 @@ export default function MobileTabBar({ role: roleProp, leaderFlag: leaderFlagPro
               <Link href="/logoped/notifications" className={linkClass('/logoped/notifications')}>
                 <span aria-hidden className="text-[18px] leading-none">🔔</span>
                 <span>Уведомл.</span>
+                <span className="absolute -top-1 right-2">
+                  <NotificationsBadge />
+                </span>
               </Link>
               <Link href="/chat" className={linkClass('/chat')}>
                 <span aria-hidden className="text-[18px] leading-none">💬</span>
                 <span>Чат</span>
+                <span className="absolute -top-1 right-2">
+                  <ChatUnreadBadge />
+                </span>
               </Link>
               <button className={commonClass + ' relative'} onClick={()=>setMoreOpen(true)}>
                 <span aria-hidden className="text-[18px] leading-none">⋯</span>
@@ -177,6 +195,9 @@ export default function MobileTabBar({ role: roleProp, leaderFlag: leaderFlagPro
               <Link href="/logoped/schedule" className={linkClass('/logoped/schedule')}>
                 <span aria-hidden className="text-[18px] leading-none">📅</span>
                 <span>Расписание</span>
+                <span className="absolute -top-1 right-2">
+                  <SchedulePendingBadge />
+                </span>
               </Link>
               <Link href="/logoped/clients" className={linkClass('/logoped/clients')}>
                 <span aria-hidden className="text-[18px] leading-none">👥</span>
@@ -185,14 +206,23 @@ export default function MobileTabBar({ role: roleProp, leaderFlag: leaderFlagPro
               <Link href="/logoped/notifications" className={linkClass('/logoped/notifications')}>
                 <span aria-hidden className="text-[18px] leading-none">🔔</span>
                 <span>Уведомл.</span>
+                <span className="absolute -top-1 right-2">
+                  <NotificationsBadge />
+                </span>
               </Link>
               <Link href="/chat" className={linkClass('/chat')}>
                 <span aria-hidden className="text-[18px] leading-none">💬</span>
                 <span>Чат</span>
+                <span className="absolute -top-1 right-2">
+                  <ChatUnreadBadge />
+                </span>
               </Link>
-              <button className={commonClass} onClick={()=>setMoreOpen(true)}>
+              <button className={commonClass + ' relative'} onClick={()=>setMoreOpen(true)}>
                 <span aria-hidden className="text-[18px] leading-none">⋯</span>
                 <span>Меню</span>
+                <span className="absolute -top-1 right-2">
+                  <LogopedOrgFinanceBadge />
+                </span>
               </button>
             </>
           )}
