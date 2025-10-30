@@ -22,6 +22,64 @@ self.addEventListener('install', (event) => {
   );
 });
 
+// --- Web Push notifications ---
+function isQuietHoursMoscow(nowUtcMs) {
+  try {
+    // Convert UTC -> Europe/Moscow (UTC+3)
+    const ms = nowUtcMs + 3 * 60 * 60 * 1000
+    const h = new Date(ms).getUTCHours() // already shifted by +3, so UTC hours here = MSK hours
+    return (h >= 22 || h < 8)
+  } catch { return false }
+}
+
+self.addEventListener('push', (event) => {
+  const data = (() => {
+    try { return event.data ? event.data.json() : {} } catch { return {} }
+  })()
+  const title = data.title || 'Logoped‑KRD'
+  const body = data.body || 'У вас новое уведомление в Logoped‑KRD'
+  const url = data.url || '/after-login'
+  const tag = data.tag || 'logoped-krd'
+  const icon = data.icon || '/icons/icon-512.png'
+  const badge = data.badge || '/icons/favicon-32.png'
+  const requireInteraction = Boolean(data.requireInteraction)
+
+  const quiet = isQuietHoursMoscow(Date.now())
+  const options = {
+    body,
+    icon,
+    badge,
+    tag,
+    data: { url },
+    renotify: false,
+    requireInteraction,
+    silent: quiet || Boolean(data.silent),
+  }
+
+  event.waitUntil(self.registration.showNotification(title, options))
+})
+
+self.addEventListener('notificationclick', (event) => {
+  const url = (event.notification && event.notification.data && event.notification.data.url) || '/'
+  event.notification.close()
+  event.waitUntil((async () => {
+    const allClients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+    for (const client of allClients) {
+      try {
+        const c = client
+        if ('focus' in c && c.url && c.url.includes(self.location.origin)) {
+          await c.focus()
+          if ('navigate' in c && url) { try { await c.navigate(url) } catch {} }
+          return
+        }
+      } catch {}
+    }
+    if (self.clients && 'openWindow' in self.clients && url) {
+      try { await self.clients.openWindow(url) } catch {}
+    }
+  })())
+})
+
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys()
