@@ -1,7 +1,6 @@
-const CACHE_NAME = 'logoped-cache-v7';
+const CACHE_NAME = 'logoped-cache-v8';
 const PRECACHE_URLS = [
   '/',
-  '/offline',
   '/manifest.json',
   '/icons/favicon.svg',
   '/icons/favicon-16.png',
@@ -104,7 +103,7 @@ self.addEventListener('fetch', (event) => {
   const accept = req.headers.get('accept') || '';
   if (req.mode === 'navigate' || accept.includes('text/html')) {
     event.respondWith(
-      fetch(req).catch(() => caches.match('/offline'))
+      fetch(req).catch(() => caches.match('/'))
     );
     return;
   }

@@ -25,6 +25,8 @@ export async function POST(req: NextRequest) {
     })
     return NextResponse.json({ ok: true })
   } catch (e) {
-    return NextResponse.json({ error: 'DB_ERROR' }, { status: 500 })
+    console.error('push/subscribe DB error:', e)
+    const details = e instanceof Error ? e.message : String(e)
+    return NextResponse.json({ error: 'DB_ERROR', details }, { status: 500 })
   }
 }

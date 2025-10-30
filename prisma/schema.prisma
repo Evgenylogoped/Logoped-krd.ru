@@ -762,3 +762,19 @@ model OrganizationRequest {
   createdAt   DateTime  @default(now())
   decidedAt   DateTime?
 }
+
+/// Web Push subscription storage
+model WebPushSubscription {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  endpoint   String   @unique
+  p256dh     String
+  auth       String
+  userAgent  String?
+  platform   String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([userId, createdAt])
+}
