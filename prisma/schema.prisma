@@ -304,6 +304,9 @@ model User {
   instagram String?
   scheduleMode              String   @default("FIXED")
   scheduleFloatingConfig   Json?
+
+  // Web Push
+  webPushSubscriptions     WebPushSubscription[]
 }
 
 // (Удалён дублирующийся и ошибочный блок OrgConsultationRequest)
