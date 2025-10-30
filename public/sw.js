@@ -40,8 +40,8 @@ self.addEventListener('push', (event) => {
   const body = data.body || 'У вас новое уведомление в Logoped‑KRD'
   const url = data.url || '/after-login'
   const tag = data.tag || 'logoped-krd'
-  const icon = data.icon || '/icons/icon-512.png'
-  const badge = data.badge || '/icons/favicon-32.png'
+  const icon = data.icon || '/icons/push-512.png'
+  const badge = data.badge || '/icons/badge-96.png'
   const requireInteraction = Boolean(data.requireInteraction)
 
   const quiet = isQuietHoursMoscow(Date.now())
