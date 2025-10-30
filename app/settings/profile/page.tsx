@@ -9,6 +9,7 @@ import ChildPhotoUploader from '@/components/ChildPhotoUploader'
 import SubmitButton from '@/components/forms/SubmitButton'
 import VisibilityToggles from '@/components/profile/VisibilityToggles'
 import AfterSaveRefresh from '@/components/profile/AfterSaveRefresh'
+import PushToggle from '@/components/settings/PushToggle'
 
 export const revalidate = 0
 export const runtime = 'nodejs'
@@ -68,6 +69,12 @@ export default async function SettingsProfilePage({ searchParams }: { searchPara
             <button className="btn btn-primary btn-sm">Сохранить тему</button>
           </div>
         </form>
+      </section>
+
+      {/* Push‑уведомления */}
+      <section className="section max-w-3xl">
+        <h2 className="text-lg font-semibold mb-2">Push‑уведомления</h2>
+        <PushToggle />
       </section>
       <form action={updateProfile} className="relative grid gap-3 sm:grid-cols-2 max-w-3xl">
         {/* Оверлей на время сохранения (управляется свойством disabled у fieldset через CSS утилиты) */}
