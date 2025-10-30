@@ -1,4 +1,4 @@
-const CACHE_NAME = 'logoped-cache-v6';
+const CACHE_NAME = 'logoped-cache-v7';
 const PRECACHE_URLS = [
   '/',
   '/offline',
