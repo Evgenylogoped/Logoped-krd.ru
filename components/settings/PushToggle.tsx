@@ -23,13 +23,20 @@ export default function PushToggle() {
   const [supported, setSupported] = React.useState<boolean>(false)
   const [enabled, setEnabled] = React.useState<boolean>(false)
   const [busy, setBusy] = React.useState<boolean>(false)
-  const publicKey = (process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || '').trim()
+  const [publicKey, setPublicKey] = React.useState<string>('')
 
   React.useEffect(() => {
     const ok = typeof window !== 'undefined' && 'Notification' in window && 'serviceWorker' in navigator && 'PushManager' in window
     setSupported(ok)
     ;(async () => {
       if (!ok) return
+      try {
+        const res = await fetch('/api/push/public-key')
+        if (res.ok) {
+          const j = await res.json()
+          if (j && typeof j.key === 'string') setPublicKey(j.key.trim())
+        }
+      } catch {}
       const reg = await getRegistration()
       const sub = await reg?.pushManager.getSubscription()
       setEnabled(!!sub)
