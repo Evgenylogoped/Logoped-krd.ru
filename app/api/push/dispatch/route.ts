@@ -75,8 +75,8 @@ export async function POST() {
         }
       }
 
-      const sub = await prisma.webPushSubscription.findFirst({ where: { userId: ev.userId }, orderBy: { createdAt: 'desc' } })
-      if (!sub) {
+      const subs = await prisma.webPushSubscription.findMany({ where: { userId: ev.userId }, orderBy: { createdAt: 'desc' } })
+      if (!subs.length) {
         await prisma.pushDeliveryLog.create({ data: { userId: ev.userId, type: ev.type as any, status: 'error', error: 'NO_SUBSCRIPTION' } })
         await prisma.pushEventQueue.delete({ where: { id: ev.id } })
         continue
@@ -87,10 +87,38 @@ export async function POST() {
         badge: '/icons/badge-mono.svg',
         ...(ev.payload as any),
       })
-      await webpush.sendNotification({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } } as any, payload)
-      await prisma.pushDeliveryLog.create({ data: { userId: ev.userId, type: ev.type as any, status: 'success' } })
-      await prisma.pushEventQueue.delete({ where: { id: ev.id } })
-      sent++
+
+      let delivered = 0
+      for (const s of subs) {
+        try {
+          await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } } as any, payload)
+          await prisma.pushDeliveryLog.create({ data: { userId: ev.userId, type: ev.type as any, status: 'success' } })
+          delivered++
+        } catch (e: any) {
+          const msg = e?.message || String(e)
+          if (msg.includes('410') || msg.includes('unsubscribed') || msg.includes('expired')) {
+            try { await prisma.webPushSubscription.delete({ where: { endpoint: s.endpoint } }) } catch {}
+            await prisma.pushDeliveryLog.create({ data: { userId: ev.userId, type: ev.type as any, status: 'error', error: '410_GONE' } })
+          } else {
+            await prisma.pushDeliveryLog.create({ data: { userId: ev.userId, type: ev.type as any, status: 'error', error: msg.slice(0, 500) } })
+          }
+        }
+      }
+
+      if (delivered > 0) {
+        await prisma.pushEventQueue.delete({ where: { id: ev.id } })
+        sent++
+        continue
+      }
+      // If reached here, no delivery succeeded; decide retry vs delete.
+      const stillHasSubs = await prisma.webPushSubscription.count({ where: { userId: ev.userId } })
+      if (!stillHasSubs) {
+        await prisma.pushEventQueue.delete({ where: { id: ev.id } })
+      } else {
+        const nextDelayMin = [1, 5, 15, 60][Math.min(ev.attempt, 3)]
+        const retryAt = new Date(Date.now() + nextDelayMin * 60 * 1000)
+        await prisma.pushEventQueue.update({ where: { id: ev.id }, data: { attempt: ev.attempt + 1, nextRetryAt: retryAt } })
+      }
     } catch (e: any) {
       errors++
       const msg = e?.message || String(e)
