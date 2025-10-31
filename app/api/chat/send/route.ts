@@ -42,6 +42,13 @@ export async function POST(req: NextRequest) {
   try {
     const msg = await (prisma as any).message.create({ data: { conversationId: conv.id, authorId: userId, body: String(body), replyToId: replyToId || null } })
     await (prisma as any).conversation.update({ where: { id: conv.id }, data: { updatedAt: new Date() } })
+    try {
+      const recips = await (prisma as any).conversationParticipant.findMany({ where: { conversationId: conv.id, NOT: { userId } }, select: { userId: true } })
+      const text = String(body || '').slice(0, 120)
+      const payload = { title: 'Новое сообщение', body: text, url: `/chat?c=${conv.id}` }
+      const data = (recips || []).map((r: any) => ({ userId: String(r.userId), type: 'MSG_NEW', payload, scheduledAt: new Date(), attempt: 0 }))
+      if (data.length) { try { await (prisma as any).pushEventQueue.createMany({ data, skipDuplicates: true }) } catch {} }
+    } catch {}
     // mark my lastReadAt (best-effort)
     try { await (prisma as any).conversationParticipant.update({ where: { conversationId_userId: { conversationId: conv.id, userId } }, data: { lastReadAt: new Date() } }) } catch {}
     try { await prisma.auditLog.create({ data: { action: 'CHAT_SEND_API', payload: JSON.stringify({ conversationId: conv.id, userId, len: String(body||'').length }) , actorId: userId } }) } catch {}
