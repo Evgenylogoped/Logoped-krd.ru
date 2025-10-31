@@ -307,6 +307,10 @@ model User {
 
   // Web Push
   webPushSubscriptions     WebPushSubscription[]
+  // Push notification preferences and logs
+  notificationPreference  UserNotificationPreference?
+  pushEventsQueued        PushEventQueue[]
+  pushDeliveryLogs        PushDeliveryLog[]
 }
 
 // (Удалён дублирующийся и ошибочный блок OrgConsultationRequest)
@@ -778,6 +782,58 @@ model WebPushSubscription {
   platform   String?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
+
+  @@index([userId, createdAt])
+}
+
+/// Push notification types
+enum PushType {
+  MSG_NEW
+  BOOKING_UPDATE
+  PAYMENT_STATUS
+  ADMIN_BROADCAST
+}
+
+/// User-level notification preferences
+model UserNotificationPreference {
+  userId              String   @id
+  user                User     @relation(fields: [userId], references: [id])
+  msgNew              Boolean  @default(true)
+  bookingUpdate       Boolean  @default(true)
+  paymentStatus       Boolean  @default(true)
+  adminBroadcast      Boolean  @default(true)
+  quietHoursEnabled   Boolean  @default(true)
+  quietFromMsk        Int      @default(22) // 0..23
+  quietToMsk          Int      @default(8)  // 0..23
+  updatedAt           DateTime @updatedAt
+  createdAt           DateTime @default(now())
+}
+
+/// Queue of push events to deliver
+model PushEventQueue {
+  id           String    @id @default(cuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id])
+  type         PushType
+  payload      Json
+  scheduledAt  DateTime  @default(now())
+  attempt      Int       @default(0)
+  nextRetryAt  DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@index([userId, scheduledAt])
+  @@index([nextRetryAt])
+}
+
+/// Delivery results for audit/metrics
+model PushDeliveryLog {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id])
+  type      PushType
+  status    String    // success | error
+  error     String?
+  createdAt DateTime  @default(now())
 
   @@index([userId, createdAt])
 }
