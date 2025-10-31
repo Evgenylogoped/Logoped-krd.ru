@@ -22,6 +22,7 @@ function urlB64ToUint8Array(base64String: string) {
 export default function PushToggle() {
   const [supported, setSupported] = React.useState<boolean>(false)
   const [enabled, setEnabled] = React.useState<boolean>(false)
+  const [globalEnabled, setGlobalEnabled] = React.useState<boolean>(false)
   const [busy, setBusy] = React.useState<boolean>(false)
   const [publicKey, setPublicKey] = React.useState<string>('')
 
@@ -35,6 +36,13 @@ export default function PushToggle() {
         if (res.ok) {
           const j = await res.json()
           if (j && typeof j.key === 'string') setPublicKey(j.key.trim())
+        }
+      } catch {}
+      try {
+        const st = await fetch('/api/push/status')
+        if (st.ok) {
+          const j = await st.json()
+          if (j && typeof j.enabled === 'boolean') setGlobalEnabled(!!j.enabled)
         }
       } catch {}
       const reg = await getRegistration()
@@ -57,6 +65,7 @@ export default function PushToggle() {
       const body = JSON.stringify({ endpoint: sub.endpoint, keys: (sub.toJSON() as any).keys, userAgent: navigator.userAgent, platform: (navigator as any).platform || '' })
       await fetch('/api/push/subscribe', { method: 'POST', headers: { 'content-type': 'application/json' }, body })
       setEnabled(true)
+      setGlobalEnabled(true)
     } finally {
       setBusy(false)
     }
@@ -78,6 +87,22 @@ export default function PushToggle() {
     }
   }
 
+  async function turnOffGlobally() {
+    setBusy(true)
+    try {
+      await fetch('/api/push/unsubscribe-all', { method: 'POST' })
+      try {
+        const reg = await getRegistration()
+        const sub = await reg?.pushManager.getSubscription()
+        if (sub) await sub.unsubscribe()
+      } catch {}
+      setEnabled(false)
+      setGlobalEnabled(false)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function sendTest() {
     if (!enabled) return
     setBusy(true)
@@ -94,10 +119,15 @@ export default function PushToggle() {
 
   return (
     <div className="flex items-center gap-3">
-      <button disabled={busy || enabled || !publicKey} className="btn btn-primary btn-sm" onClick={subscribe}>Включить push‑уведомления</button>
-      <button disabled={busy || !enabled} className="btn btn-outline btn-sm" onClick={unsubscribe}>Отключить</button>
+      <button
+        disabled={busy || (!globalEnabled && !publicKey)}
+        className="btn btn-primary btn-sm"
+        onClick={async () => { if (globalEnabled) { await turnOffGlobally() } else { await subscribe() } }}
+      >{globalEnabled ? 'Отключить push‑уведомления' : 'Включить push‑уведомления'}</button>
+      <button disabled={busy || !enabled} className="btn btn-outline btn-sm" onClick={unsubscribe}>Отключить на этом устройстве</button>
       <button disabled={busy || !enabled} className="btn btn-secondary btn-sm" onClick={sendTest}>Отправить тестовое</button>
       {!publicKey && <span className="text-xs text-muted">Ключ браузера не настроен</span>}
+      {globalEnabled && !enabled && <button disabled={busy || !publicKey} className="btn btn-ghost btn-xs" onClick={subscribe}>Подключить это устройство</button>}
     </div>
   )
 }

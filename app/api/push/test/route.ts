@@ -27,8 +27,8 @@ export async function POST() {
     const payload = JSON.stringify({
       title: 'Logoped-krd.ru',
       body: 'Тестовое уведомление',
-      icon: '/icons/push-512.png',
-      badge: '/icons/badge-96.png',
+      icon: '/icons/icon-512.png',
+      badge: '/icons/icon-192.png',
       data: { url: '/' },
     })
     await webpush.sendNotification({
