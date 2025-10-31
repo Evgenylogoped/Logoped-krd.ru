@@ -78,10 +78,12 @@ export async function POST(req: Request) {
           const priceId = sub?.items?.data?.[0]?.price?.id as string | undefined
           const mappedPlan = mapPriceIdToPlan(priceId) || plan
           await upsertSubscription(userId, mappedPlan, sub?.status || 'active', sub?.current_period_start || null, sub?.current_period_end || null)
+          try { await (prisma as any).pushEventQueue.create({ data: { userId, type: 'PAYMENT_STATUS', payload: { title: 'Оплата успешна', body: `Тариф: ${mappedPlan}`, url: '/after-login' }, scheduledAt: new Date(), attempt: 0 } }) } catch {}
         } else {
           // Fallback: 30 дней от сегодня
           const now = Math.floor(Date.now()/1000)
           await upsertSubscription(userId, plan, 'active', now, now + 30*24*60*60)
+          try { await (prisma as any).pushEventQueue.create({ data: { userId, type: 'PAYMENT_STATUS', payload: { title: 'Оплата успешна', body: `Тариф: ${plan}`, url: '/after-login' }, scheduledAt: new Date(), attempt: 0 } }) } catch {}
         }
         break
       }
@@ -97,6 +99,12 @@ export async function POST(req: Request) {
         const priceId = sub?.items?.data?.[0]?.price?.id as string | undefined
         const plan = mapPriceIdToPlan(priceId) || 'pro'
         await upsertSubscription(userId, plan, sub?.status || 'active', sub?.current_period_start || null, sub?.current_period_end || null)
+        try {
+          const st = String(sub?.status || 'active')
+          const title = st === 'canceled' || st === 'incomplete_expired' ? 'Подписка отменена' : 'Статус подписки обновлён'
+          const body = `Тариф: ${plan}, статус: ${st}`
+          await (prisma as any).pushEventQueue.create({ data: { userId, type: 'PAYMENT_STATUS', payload: { title, body, url: '/after-login' }, scheduledAt: new Date(), attempt: 0 } })
+        } catch {}
         break
       }
       default: {

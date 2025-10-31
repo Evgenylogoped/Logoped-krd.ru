@@ -126,6 +126,14 @@ export async function enroll(formData: FormData): Promise<void> {
       status: 'ACTIVE',
     }
   })
+  // enqueue push for logoped about new booking request
+  try {
+    const logopedId = (lesson as any).logopedId as string | undefined
+    if (logopedId) {
+      const payload = { title: 'Новая заявка на запись', body: holder, url: '/logoped/schedule' }
+      await (prisma as any).pushEventQueue.create({ data: { userId: logopedId, type: 'BOOKING_UPDATE', payload, scheduledAt: new Date(), attempt: 0 } })
+    }
+  } catch {}
   // Notify logoped by email if available
   try {
     const logopedEmail = (lesson as any).logoped?.email as string | undefined
