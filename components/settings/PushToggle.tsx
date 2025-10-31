@@ -78,6 +78,16 @@ export default function PushToggle() {
     }
   }
 
+  async function sendTest() {
+    if (!enabled) return
+    setBusy(true)
+    try {
+      await fetch('/api/push/test', { method: 'POST' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
   if (!supported) return (
     <div className="rounded border p-3 bg-amber-50 text-amber-900 text-sm">Пуш‑уведомления не поддерживаются на этом устройстве/браузере.</div>
   )
@@ -86,6 +96,7 @@ export default function PushToggle() {
     <div className="flex items-center gap-3">
       <button disabled={busy || enabled || !publicKey} className="btn btn-primary btn-sm" onClick={subscribe}>Включить push‑уведомления</button>
       <button disabled={busy || !enabled} className="btn btn-outline btn-sm" onClick={unsubscribe}>Отключить</button>
+      <button disabled={busy || !enabled} className="btn btn-secondary btn-sm" onClick={sendTest}>Отправить тестовое</button>
       {!publicKey && <span className="text-xs text-muted">Ключ браузера не настроен</span>}
     </div>
   )
