@@ -5,6 +5,7 @@ import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { sendMail } from '@/lib/mail'
 import { redirect } from 'next/navigation'
+import { formatFioShort, formatTimeMsk, formatDateTimeMsk } from '@/lib/pushText'
 
 function ensureLogoped(session: unknown): asserts session is { user: { role?: string; id?: string } } {
   const s = session as { user?: { role?: string; id?: string } } | null
@@ -137,6 +138,12 @@ export async function createConsultationRequest(formData: FormData): Promise<voi
   if (subordinate?.email) {
     await sendMail({ to: subordinate.email, subject: 'Запрос консультации', text: `Руководитель отправил запрос консультации на слот ${lessonId} для ребёнка ${childLastName} ${childFirstName}.` })
   }
+  // push to subordinate
+  try {
+    const when = formatDateTimeMsk(lesson.startsAt as any)
+    const payload = { title: 'Запрос консультации', body: `Ваш руководитель запросил консультацию ${when}, подтвердите или отклоните`, url: '/logoped/schedule' }
+    await (prisma as any).pushEventQueue.create({ data: { userId: subordinateId, type: 'BOOKING_UPDATE', payload, scheduledAt: new Date(), attempt: 0 } })
+  } catch {}
   revalidatePath('/logoped/schedule')
   redirect(`/logoped/schedule?consult=${consultCode}`)
 }
@@ -533,12 +540,28 @@ export async function generateWeekSlots(formData: FormData): Promise<void> {
 export async function enrollChildToLesson(formData: FormData): Promise<void> {
   const session = await getServerSession(authOptions)
   ensureLogoped(session)
+  const userId = String(session.user.id || '')
   const childId = String(formData.get('childId') || '')
   const lessonId = String(formData.get('lessonId') || '')
   if (!childId || !lessonId) return
   const exists = await prisma.enrollment.findUnique({ where: { childId_lessonId: { childId, lessonId } } })
   if (!exists) {
     await prisma.enrollment.create({ data: { childId, lessonId, status: 'ENROLLED' } })
+    try {
+      const lesson = await prisma.lesson.findUnique({ where: { id: lessonId } })
+      const child = await prisma.child.findUnique({ where: { id: childId }, include: { parent: { include: { user: true } } } })
+      const holder = child ? `${child.lastName || ''} ${child.firstName || ''}`.trim() : 'ребёнок'
+      const when = lesson ? formatTimeMsk(lesson.startsAt as any) : ''
+      const me = await prisma.user.findUnique({ where: { id: userId } })
+      // push to logoped (self)
+      await (prisma as any).pushEventQueue.create({ data: { userId, type: 'BOOKING_UPDATE', payload: { title: 'Вы спланировали занятие', body: `с ${holder} в ${when}`, url: '/logoped/schedule' }, scheduledAt: new Date(), attempt: 0 } })
+      // push to parent
+      const parentUserId = (child?.parent as any)?.userId as string | undefined
+      if (parentUserId) {
+        const whenFull = lesson ? `${formatTimeMsk(lesson.startsAt as any)} ${new Date(lesson.startsAt as any).toLocaleDateString('ru-RU')}` : ''
+        await (prisma as any).pushEventQueue.create({ data: { userId: parentUserId, type: 'BOOKING_UPDATE', payload: { title: 'Запланировано занятие', body: `с ${holder} в ${whenFull}`, url: '/parent/schedule' }, scheduledAt: new Date(), attempt: 0 } })
+      }
+    } catch {}
   }
   revalidatePath('/logoped/schedule')
 }
@@ -554,10 +577,25 @@ export async function cancelBooking(formData: FormData): Promise<void> {
 export async function cancelEnrollment(formData: FormData): Promise<void> {
   const session = await getServerSession(authOptions)
   ensureLogoped(session)
+  const userId = String(session.user.id || '')
   const childId = String(formData.get('childId') || '')
   const lessonId = String(formData.get('lessonId') || '')
   if (!childId || !lessonId) return
   await prisma.enrollment.delete({ where: { childId_lessonId: { childId, lessonId } } }).catch(()=>{})
+  try {
+    const lesson = await prisma.lesson.findUnique({ where: { id: lessonId } })
+    const child = await prisma.child.findUnique({ where: { id: childId }, include: { parent: { include: { user: true } } } })
+    const holder = child ? `${child.lastName || ''} ${child.firstName || ''}`.trim() : 'ребёнок'
+    const when = lesson ? formatTimeMsk(lesson.startsAt as any) : ''
+    // push to logoped (self)
+    await (prisma as any).pushEventQueue.create({ data: { userId, type: 'BOOKING_UPDATE', payload: { title: 'Вы отменили занятие', body: `с ${holder} на ${when}`, url: '/logoped/schedule' }, scheduledAt: new Date(), attempt: 0 } })
+    // push to parent
+    const parentUserId = (child?.parent as any)?.userId as string | undefined
+    if (parentUserId) {
+      const whenFull = lesson ? `${formatTimeMsk(lesson.startsAt as any)} ${new Date(lesson.startsAt as any).toLocaleDateString('ru-RU')}` : ''
+      await (prisma as any).pushEventQueue.create({ data: { userId: parentUserId, type: 'BOOKING_UPDATE', payload: { title: 'Занятие отменено', body: `с ${holder} на ${whenFull} ОТМЕНЕНО`, url: '/parent/schedule' }, scheduledAt: new Date(), attempt: 0 } })
+    }
+  } catch {}
   revalidatePath('/logoped/schedule')
 }
 

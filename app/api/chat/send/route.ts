@@ -6,6 +6,7 @@ import { getServerSession } from 'next-auth'
 import { getToken } from 'next-auth/jwt'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
+import { formatFioShort, firstWords } from '@/lib/pushText'
 
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions)
@@ -44,8 +45,10 @@ export async function POST(req: NextRequest) {
     await (prisma as any).conversation.update({ where: { id: conv.id }, data: { updatedAt: new Date() } })
     try {
       const recips = await (prisma as any).conversationParticipant.findMany({ where: { conversationId: conv.id, NOT: { userId } }, select: { userId: true } })
-      const text = String(body || '').slice(0, 120)
-      const payload = { title: 'Новое сообщение', body: text, url: `/chat?c=${conv.id}` }
+      const author = await (prisma as any).user.findUnique({ where: { id: userId }, select: { firstName: true, lastName: true, middleName: true, name: true, email: true } })
+      const authorShort = formatFioShort(author)
+      const snippet = firstWords(String(body || ''), 5)
+      const payload = { title: 'Вам пришло сообщение в чат', body: `от ${authorShort}, ${snippet}${snippet ? '…' : ''} Просмотреть`, url: `/chat?c=${conv.id}` }
       const data = (recips || []).map((r: any) => ({ userId: String(r.userId), type: 'MSG_NEW', payload, scheduledAt: new Date(), attempt: 0 }))
       if (data.length) { try { await (prisma as any).pushEventQueue.createMany({ data, skipDuplicates: true }) } catch {} }
     } catch {}
