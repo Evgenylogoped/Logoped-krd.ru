@@ -32,7 +32,7 @@ export async function createPayoutRequest(): Promise<void> {
     return sum
   }, 0)
 
-  await (prisma as any).payoutRequest.create({
+  const req = await (prisma as any).payoutRequest.create({
     data: {
       logopedId: userId,
       // Поля snapshot оставим для бэк-совместимости, но итоговая сумма опирается на уроки
@@ -42,6 +42,25 @@ export async function createPayoutRequest(): Promise<void> {
       status: 'PENDING',
     }
   })
+  // Pushes: requester and leaders
+  try {
+    const me = await (prisma as any).user.findUnique({ where: { id: userId }, include: { branch: { include: { company: true } } } })
+    const amountStr = `${Number(finalAmount||0).toLocaleString('ru-RU')} ₽`
+    const dateStr = new Date(req.createdAt).toLocaleDateString('ru-RU')
+    // To requester
+    try { await (prisma as any).pushEventQueue.create({ data: { userId, type: 'PAYMENT_STATUS', payload: { title: 'Вы запросили выплату', body: `руководителю на сумму ${amountStr} от ${dateStr}`, url: '/logoped/finance' }, scheduledAt: new Date(), attempt: 0 } }) } catch {}
+    // To leaders (branch manager and company owner if exist and not me)
+    const targets: string[] = []
+    const managerId = me?.branch?.managerId as string | undefined
+    const ownerId = me?.branch?.company?.ownerId as string | undefined
+    if (managerId && managerId !== userId) targets.push(managerId)
+    if (ownerId && ownerId !== userId && ownerId !== managerId) targets.push(ownerId)
+    if (targets.length) {
+      const fio = `${me?.lastName||''} ${((me?.firstName||'').toString().trim()[0]||'').toUpperCase()}.` + `${((me?.middleName||'').toString().trim()[0]||'') ? ((me?.middleName||'').toString().trim()[0].toUpperCase()+'.') : ''}`
+      const body = `${fio.trim()} запросил(а) выплату на сумму ${amountStr} от ${dateStr}`
+      await (prisma as any).pushEventQueue.createMany({ data: targets.map(t => ({ userId: t, type: 'PAYMENT_STATUS', payload: { title: 'Запрос выплаты от логопеда', body, url: 'https://logoped-krd.ru/admin/finance/payouts' }, scheduledAt: new Date(), attempt: 0 })) })
+    }
+  } catch {}
   revalidatePath('/logoped/finance')
   redirect('/logoped/finance?sent=1')
 }

@@ -49,6 +49,17 @@ export async function confirmPayout(formData: FormData): Promise<void> {
       data: { status: 'PAID', confirmedAt: new Date(), confirmedById: adminId }
     })
   ])
+  // Push notifications to both sides
+  try {
+    const logopedId = String(req.logopedId)
+    const admin = await (prisma as any).user.findUnique({ where: { id: adminId }, select: { firstName: true, lastName: true, middleName: true } })
+    const fio = `${(admin?.lastName||'').trim()} ${((admin?.firstName||'')||'').toString().trim().slice(0,1).toUpperCase()}.${((admin?.middleName||'')||'').toString().trim().slice(0,1).toUpperCase() || ''}`.trim()
+    const amountStr = `${Number(finalAmount||0).toLocaleString('ru-RU')} ₽`
+    // To logoped
+    try { await (prisma as any).pushEventQueue.create({ data: { userId: logopedId, type: 'PAYMENT_STATUS', payload: { title: 'Выплата подтверждена', body: `Вас рассчитал руководитель ${fio} по вашему запросу`, url: '/logoped/finance' }, scheduledAt: new Date(), attempt: 0 } }) } catch {}
+    // To leader (self)
+    try { await (prisma as any).pushEventQueue.create({ data: { userId: adminId, type: 'PAYMENT_STATUS', payload: { title: 'Выплата выполнена', body: `Вы рассчитаны с логопедом на сумму ${amountStr}`, url: 'https://logoped-krd.ru/admin/finance/payouts' }, scheduledAt: new Date(), attempt: 0 } }) } catch {}
+  } catch {}
 
   revalidatePath('/admin/finance/payouts')
 }
