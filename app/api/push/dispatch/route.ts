@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
@@ -15,10 +15,20 @@ function inQuietHoursMsk(nowUtcMs: number, fromHour: number, toHour: number) {
   return h >= fromHour || h < toHour
 }
 
-export async function POST() {
-  const session = await getServerSession(authOptions)
-  if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  // Allow any logged user to trigger for now (can be cron/authed later)
+export async function POST(req: NextRequest) {
+  const cronKey = (req.headers.get('x-cron-key') || '').trim()
+  const expected = (process.env.CRON_PUSH_KEY || '').trim()
+  const host = (req.headers.get('host') || '').toLowerCase()
+  const isLocal = host.startsWith('127.0.0.1') || host.startsWith('localhost')
+  if (!isLocal) {
+    if (!expected && !cronKey) {
+      const session = await getServerSession(authOptions)
+      if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    } else if (!expected || cronKey !== expected) {
+      const session = await getServerSession(authOptions)
+      if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+  }
 
   const pub = (process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || '').trim()
   const priv = (process.env.VAPID_PRIVATE_KEY || '').trim()
@@ -95,10 +105,11 @@ export async function POST() {
           await prisma.pushDeliveryLog.create({ data: { userId: ev.userId, type: ev.type as any, status: 'success' } })
           delivered++
         } catch (e: any) {
-          const msg = e?.message || String(e)
-          if (msg.includes('410') || msg.includes('unsubscribed') || msg.includes('expired')) {
+          const sc = (e && typeof e === 'object' && 'statusCode' in e) ? Number((e as any).statusCode) : undefined
+          const msg = (e?.message || String(e)) + (sc ? ` [${sc}]` : '')
+          if (sc === 404 || sc === 410 || msg.includes('410') || msg.includes('unsubscribed') || msg.includes('expired')) {
             try { await prisma.webPushSubscription.delete({ where: { endpoint: s.endpoint } }) } catch {}
-            await prisma.pushDeliveryLog.create({ data: { userId: ev.userId, type: ev.type as any, status: 'error', error: '410_GONE' } })
+            await prisma.pushDeliveryLog.create({ data: { userId: ev.userId, type: ev.type as any, status: 'error', error: sc === 404 ? '404_NOT_FOUND' : '410_GONE' } })
           } else {
             await prisma.pushDeliveryLog.create({ data: { userId: ev.userId, type: ev.type as any, status: 'error', error: msg.slice(0, 500) } })
           }
@@ -121,14 +132,15 @@ export async function POST() {
       }
     } catch (e: any) {
       errors++
-      const msg = e?.message || String(e)
+      const sc = (e && typeof e === 'object' && 'statusCode' in e) ? Number((e as any).statusCode) : undefined
+      const msg = (e?.message || String(e)) + (sc ? ` [${sc}]` : '')
       // 410 Gone -> удалить подписку
-      if (msg.includes('410') || msg.includes('unsubscribed') || msg.includes('expired')) {
+      if (sc === 404 || sc === 410 || msg.includes('410') || msg.includes('unsubscribed') || msg.includes('expired')) {
         try {
           const sub = await prisma.webPushSubscription.findFirst({ where: { userId: ev.userId } })
           if (sub) await prisma.webPushSubscription.delete({ where: { endpoint: sub.endpoint } })
         } catch {}
-        await prisma.pushDeliveryLog.create({ data: { userId: ev.userId, type: ev.type as any, status: 'error', error: msg.slice(0, 500) } })
+        await prisma.pushDeliveryLog.create({ data: { userId: ev.userId, type: ev.type as any, status: 'error', error: (sc === 404 ? '404_NOT_FOUND' : '410_GONE') } })
         await prisma.pushEventQueue.delete({ where: { id: ev.id } })
         continue
       }

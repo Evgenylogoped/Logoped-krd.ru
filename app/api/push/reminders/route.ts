@@ -22,10 +22,12 @@ function endOfDayMsk(d: Date) {
 }
 
 export async function POST(req: NextRequest) {
-  // Cron-key auth (same policy as dispatch)
+  // Cron-key auth (same policy as dispatch); allow local host bypass
   const cronKey = (req.headers.get('x-cron-key') || '').trim()
   const expected = (process.env.CRON_PUSH_KEY || '').trim()
-  if (!expected || cronKey !== expected) {
+  const host = (req.headers.get('host') || '').toLowerCase()
+  const isLocal = host.startsWith('127.0.0.1') || host.startsWith('localhost')
+  if (!isLocal && (!expected || cronKey !== expected)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
