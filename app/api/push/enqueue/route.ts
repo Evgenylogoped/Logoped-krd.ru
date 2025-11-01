@@ -26,6 +26,15 @@ export async function POST(req: NextRequest) {
         scheduledAt: scheduledAt ? new Date(scheduledAt) : new Date(),
       },
     })
+    // fire-and-forget immediate dispatch to reduce latency
+    try {
+      const cronKey = (process.env.CRON_PUSH_KEY || '').trim()
+      const origin = req.headers.get('origin') || `${req.nextUrl.protocol}//${req.nextUrl.host}`
+      if (cronKey && origin && origin.startsWith('http')) {
+        // best-effort, do not await
+        fetch(`${origin}/api/push/dispatch`, { method: 'POST', headers: { 'X-CRON-KEY': cronKey } }).catch(() => {})
+      }
+    } catch {}
     return NextResponse.json({ ok: true })
   } catch (e) {
     const details = e instanceof Error ? e.message : String(e)
