@@ -13,6 +13,7 @@ export default withAuth(
       // finance area: пропускаем и LOGOPED, дальше серверная страница проверит владельца/менеджера
       '/admin/finance': ['ADMIN', 'SUPER_ADMIN', 'ACCOUNTANT', 'LOGOPED'],
       // admin area
+      '/admin/push': ['ADMIN', 'SUPER_ADMIN', 'ACCOUNTANT'],
       '/admin/logopeds': ['ADMIN', 'SUPER_ADMIN', 'ACCOUNTANT'],
       '/admin/clients': ['ADMIN', 'SUPER_ADMIN', 'ACCOUNTANT'],
       '/admin/companies': ['ADMIN', 'SUPER_ADMIN', 'ACCOUNTANT'],

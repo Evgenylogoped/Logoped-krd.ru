@@ -249,8 +249,9 @@ export default function DesktopSidebar({ role: roleProp, city: cityProp }: { rol
                   <Item href="/admin/subscriptions/requests" icon={<span>•</span>} label="Заявки на смену" collapsed={!pinned} />
                   <Item href="/admin/subscriptions/limit-requests" icon={<span>•</span>} label="Лимит‑заявки" collapsed={!pinned} />
                 </div>
-                            {roleU === 'SUPER_ADMIN' && (<Item href="/admin/backups" icon={<Icon name="settings" />} label="Бэкапы" collapsed={!pinned} />)}
-                  {roleU === 'SUPER_ADMIN' && (<Item href="/admin/system/gui" icon={<Icon name="settings" />} label="Системное администрирование" collapsed={!pinned} />)}
+                <Item href="/admin/push" icon={<Icon name="bell" />} label="Рассылка" collapsed={!pinned} />
+                {roleU === 'SUPER_ADMIN' && (<Item href="/admin/backups" icon={<Icon name="settings" />} label="Бэкапы" collapsed={!pinned} />)}
+                {roleU === 'SUPER_ADMIN' && (<Item href="/admin/system/gui" icon={<Icon name="settings" />} label="Системное администрирование" collapsed={!pinned} />)}
                 <Item href="/admin/tools/purge" icon={<Icon name="settings" />} label="Очистка" collapsed={!pinned} />
               </div>
             </div>
