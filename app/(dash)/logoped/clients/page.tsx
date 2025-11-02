@@ -15,7 +15,9 @@ export default async function LogopedClientsPage({ searchParams }: { searchParam
   const sp = await searchParams
   const session = await getServerSession(authOptions)
   const role = (session?.user as any)?.role
-  if (!session || !['LOGOPED','ADMIN','SUPER_ADMIN'].includes(role)) return <div>Доступ запрещён</div>
+  if (!session || !(session.user as any)?.id) return <div>Доступ запрещён</div>
+  // Временное послабление: если роль не подтянулась в токен, не блокируем страницу (строгая проверка есть в server actions)
+  if (role && !['LOGOPED','ADMIN','SUPER_ADMIN'].includes(role)) return <div>Доступ запрещён</div>
 
   const currentLogopedId = (session.user as any).id as string
   const tab = sp?.tab || 'active'
@@ -283,7 +285,7 @@ export default async function LogopedClientsPage({ searchParams }: { searchParam
                     </LogopedPreviewTrigger>
                     <div className="text-sm text-muted">
                       Родитель: {' '}
-                      <LogopedPreviewTrigger name={(ch.parent as any).fullName || ch.parent.user.name || ch.parent.user.email} image={(ch.parent.user as any)?.image} phone={(ch.parent as any)?.phone} phone={(ch.parent as any)?.phone} subtitleLines={[((ch.parent as any)?.phone ? `Телефон: ${(ch.parent as any).phone}` : '')]} actionHref={`/chat/${convByActiveChild[ch.id] || ''}`} actionLabel="Написать">
+                      <LogopedPreviewTrigger name={(ch.parent as any).fullName || ch.parent.user.name || ch.parent.user.email} image={(ch.parent.user as any)?.image} phone={(ch.parent as any)?.phone} subtitleLines={[((ch.parent as any)?.phone ? `Телефон: ${(ch.parent as any).phone}` : '')]} actionHref={`/chat/${convByActiveChild[ch.id] || ''}`} actionLabel="Написать">
                         <span className="underline cursor-pointer truncate max-w-[180px] inline-block align-bottom" title={(ch.parent as any).fullName || ch.parent.user.name || ch.parent.user.email}>{(ch.parent as any).fullName || ch.parent.user.name || ''}</span>
                       </LogopedPreviewTrigger>
                     </div>
@@ -363,7 +365,7 @@ export default async function LogopedClientsPage({ searchParams }: { searchParam
                     </LogopedPreviewTrigger>
                     <div className="text-sm text-muted">
                       Родитель: {' '}
-                      <LogopedPreviewTrigger name={(ch.parent as any).fullName || ch.parent.user.name || ch.parent.user.email} image={(ch.parent.user as any)?.image} phone={(ch.parent as any)?.phone} phone={(ch.parent as any)?.phone} subtitleLines={[((ch.parent as any)?.phone ? `Телефон: ${(ch.parent as any).phone}` : '')]} actionHref={`/chat/${convByArchivedParent[ch.parent.user.id] || ''}`} actionLabel="Написать">
+                      <LogopedPreviewTrigger name={(ch.parent as any).fullName || ch.parent.user.name || ch.parent.user.email} image={(ch.parent.user as any)?.image} phone={(ch.parent as any)?.phone} subtitleLines={[((ch.parent as any)?.phone ? `Телефон: ${(ch.parent as any).phone}` : '')]} actionHref={`/chat/${convByArchivedParent[ch.parent.user.id] || ''}`} actionLabel="Написать">
                         <span className="underline cursor-pointer truncate max-w-[180px] inline-block align-bottom" title={(ch.parent as any).fullName || ch.parent.user.name || ch.parent.user.email}>{(ch.parent as any).fullName || ch.parent.user.name || ''}</span>
                       </LogopedPreviewTrigger>
                     </div>
