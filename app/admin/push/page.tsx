@@ -1,8 +1,6 @@
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import NextDynamic from 'next/dynamic'
-
-const AdminBroadcast = NextDynamic(() => import('@/components/AdminBroadcast'), { ssr: false })
+import AdminBroadcast from '@/components/AdminBroadcast'
 
 export const dynamic = 'force-dynamic'
 
