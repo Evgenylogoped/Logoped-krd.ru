@@ -64,7 +64,7 @@ export default async function RootLayout({
   // Always render full layout; we already guarded dynamic next-auth imports with try/catch above
 
   // NEXTAUTH_SECRET is present: import full UI stack lazily to avoid build-time module evaluation
-  const [AuthProvider, NavBar, MobileTabBar, PWARegister, PrefetchImportant, DesktopSidebar, MobileAutoRedirect] = await Promise.all([
+  const [AuthProvider, NavBar, MobileTabBar, PWARegister, PrefetchImportant, DesktopSidebar, MobileAutoRedirect, SoftAskPush] = await Promise.all([
     import("@/components/AuthProvider").then(m => m.default),
     import("@/components/NavBar").then(m => m.default),
     import("@/components/mobile/MobileTabBar").then(m => m.default),
@@ -72,6 +72,7 @@ export default async function RootLayout({
     import("@/components/PrefetchImportant").then(m => m.default),
     import("@/components/desktop/DesktopSidebar").then(m => m.default),
     import("@/components/mobile/MobileAutoRedirect").then(m => m.default),
+    import("@/components/SoftAskPush").then(m => m.default),
   ])
 
   return (
@@ -157,6 +158,7 @@ export default async function RootLayout({
           )}
           {children}
           <PWARegister />
+          <SoftAskPush />
           <PrefetchImportant />
           {/* Late-inserted reset to override stale hashed CSS chunks after they load */}
           <script
