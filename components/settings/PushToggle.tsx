@@ -25,6 +25,7 @@ export default function PushToggle() {
   const [globalEnabled, setGlobalEnabled] = React.useState<boolean>(false)
   const [busy, setBusy] = React.useState<boolean>(false)
   const [publicKey, setPublicKey] = React.useState<string>('')
+  const [count, setCount] = React.useState<number>(0)
 
   React.useEffect(() => {
     const ok = typeof window !== 'undefined' && 'Notification' in window && 'serviceWorker' in navigator && 'PushManager' in window
@@ -43,6 +44,7 @@ export default function PushToggle() {
         if (st.ok) {
           const j = await st.json()
           if (j && typeof j.enabled === 'boolean') setGlobalEnabled(!!j.enabled)
+          if (j && typeof j.count === 'number') setCount(j.count|0)
         }
       } catch {}
       const reg = await getRegistration()
@@ -66,6 +68,7 @@ export default function PushToggle() {
       await fetch('/api/push/subscribe', { method: 'POST', headers: { 'content-type': 'application/json' }, body })
       setEnabled(true)
       setGlobalEnabled(true)
+      setCount((c) => Math.max(1, c))
     } finally {
       setBusy(false)
     }
@@ -104,10 +107,26 @@ export default function PushToggle() {
   }
 
   async function sendTest() {
-    if (!enabled) return
     setBusy(true)
     try {
-      await fetch('/api/push/test', { method: 'POST' })
+      const reg = await getRegistration()
+      if (!reg) return
+      let sub = await reg.pushManager.getSubscription()
+      if (!sub) {
+        if (!publicKey) return
+        const padding = '='.repeat((4 - (publicKey.length % 4)) % 4)
+        const base64 = (publicKey + padding).replace(/-/g, '+').replace(/_/g, '/')
+        const rawData = atob(base64)
+        const applicationServerKey = new Uint8Array(rawData.length)
+        for (let i = 0; i < rawData.length; i++) applicationServerKey[i] = rawData.charCodeAt(i)
+        const perm = await Notification.requestPermission()
+        if (perm !== 'granted') return
+        sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey })
+        const body = JSON.stringify({ endpoint: sub.endpoint, keys: (sub.toJSON() as any).keys, userAgent: navigator.userAgent, platform: (navigator as any).platform || '' })
+        await fetch('/api/push/subscribe', { method: 'POST', headers: { 'content-type': 'application/json' }, body })
+        setEnabled(true)
+      }
+      await fetch('/api/push/test-current', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ endpoint: sub.endpoint }) })
     } finally {
       setBusy(false)
     }
@@ -118,16 +137,26 @@ export default function PushToggle() {
   )
 
   return (
-    <div className="flex items-center gap-3">
-      <button
-        disabled={busy || (!globalEnabled && !publicKey)}
-        className="btn btn-primary btn-sm"
-        onClick={async () => { if (globalEnabled) { await turnOffGlobally() } else { await subscribe() } }}
-      >{globalEnabled ? 'Отключить push‑уведомления' : 'Включить push‑уведомления'}</button>
-      <button disabled={busy || !enabled} className="btn btn-outline btn-sm" onClick={unsubscribe}>Отключить на этом устройстве</button>
-      <button disabled={busy || !enabled} className="btn btn-secondary btn-sm" onClick={sendTest}>Отправить тестовое</button>
-      {!publicKey && <span className="text-xs text-muted">Ключ браузера не настроен</span>}
-      {globalEnabled && !enabled && <button disabled={busy || !publicKey} className="btn btn-ghost btn-xs" onClick={subscribe}>Подключить это устройство</button>}
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          disabled={busy || (!globalEnabled && !publicKey)}
+          className="btn btn-primary btn-sm"
+          onClick={async () => { if (globalEnabled) { await turnOffGlobally() } else { await subscribe() } }}
+        >{globalEnabled ? 'Выключить' : 'Включить'}</button>
+
+        <button disabled={busy || !enabled} className="btn btn-outline btn-xs" onClick={unsubscribe}>Отключить на этом устройстве</button>
+        <button disabled={busy || !enabled} className="btn btn-secondary btn-xs" onClick={sendTest}>Тест</button>
+        {globalEnabled && !enabled && <button disabled={busy || !publicKey} className="btn btn-ghost btn-xs" onClick={subscribe}>Подключить это устройство</button>}
+      </div>
+
+      <div className="text-xs text-muted">
+        <span>Статус: </span>
+        <span className={globalEnabled ? 'text-emerald-600' : 'text-rose-600'}>{globalEnabled ? 'включены' : 'выключены'}</span>
+        <span> · Устройств: {count}</span>
+        <span> · Это устройство: {enabled ? 'подключено' : 'не подключено'}</span>
+        {!publicKey && <span className="ml-2">Ключ браузера не настроен</span>}
+      </div>
     </div>
   )
 }
