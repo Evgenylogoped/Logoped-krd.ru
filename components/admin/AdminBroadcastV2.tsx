@@ -1,7 +1,8 @@
 "use client"
 import React from 'react'
 
-export default function AdminBroadcastV2() {
+type U = { id: string; name?: string; email?: string; phone?: string }
+export default function AdminBroadcastV2({ initialUsers = [] as U[] }: { initialUsers?: U[] }) {
   const [title, setTitle] = React.useState('Инфо')
   const [body, setBody] = React.useState('Тестовое админ‑сообщение')
   const [url, setUrl] = React.useState('/')
@@ -9,7 +10,8 @@ export default function AdminBroadcastV2() {
   const [city, setCity] = React.useState('')
   const [q, setQ] = React.useState('')
   const [sendAll, setSendAll] = React.useState(false)
-  const [found, setFound] = React.useState<{ id: string; name?: string; email?: string; phone?: string }[]>([])
+  const [found, setFound] = React.useState<U[]>(initialUsers)
+  const [err, setErr] = React.useState<string>('')
   const [selectedIds, setSelectedIds] = React.useState<string[]>([])
   const [busy, setBusy] = React.useState(false)
   const [res, setRes] = React.useState<string>('')
@@ -27,15 +29,24 @@ export default function AdminBroadcastV2() {
     if (!sendAll) {
       t = setTimeout(async () => {
         try {
+          setErr('')
           const p = new URLSearchParams()
           if (q) p.set('q', q)
           if (role) p.set('role', role)
           if (city) p.set('city', city)
-          const r = await fetch('/api/admin/users/search?' + p.toString(), { cache: 'no-store' })
+          const r = await fetch('/api/admin/users/search?' + p.toString(), { cache: 'no-store', credentials: 'include' })
+          if (!r.ok) {
+            setErr('Ошибка поиска: ' + r.status)
+            setFound(initialUsers)
+            return
+          }
           const j = await r.json().catch(()=>null)
-          if (Array.isArray(j?.items)) setFound(j.items)
-          else setFound([])
-        } catch { setFound([]) }
+          if (Array.isArray(j?.items)) setFound(j.items as U[])
+          else setFound(initialUsers)
+        } catch {
+          setErr('Ошибка сети при поиске')
+          setFound(initialUsers)
+        }
       }, 300)
     } else {
       setFound([])
@@ -56,7 +67,8 @@ export default function AdminBroadcastV2() {
       const r = await fetch('/api/push/admin-broadcast', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        credentials: 'include'
       })
       const j = await r.json().catch(()=>null)
       if (r.ok) setRes(`Отправлено в очередь: ${j?.enqueued ?? '?'} пользователей`)
@@ -103,9 +115,16 @@ export default function AdminBroadcastV2() {
               </label>
             </div>
             <div className="grid gap-1">
-              <span className="text-sm">Результаты поиска</span>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm">Результаты ({found.length}) · Выбрано: {selectedIds.length}</span>
+                <div className="flex items-center gap-2">
+                  <button type="button" className="btn btn-xs" onClick={()=>setSelectedIds(prev=>Array.from(new Set([...prev, ...found.map(u=>u.id)])))}>Выбрать все в выдаче</button>
+                  <button type="button" className="btn btn-xs" onClick={()=>setSelectedIds([])}>Снять выбор</button>
+                </div>
+              </div>
               <div className="max-h-56 overflow-auto border rounded divide-y bg-white">
-                {found.length === 0 && <div className="p-2 text-sm text-muted">Нет результатов</div>}
+                {err && <div className="p-2 text-xs text-red-600">{err}</div>}
+                {found.length === 0 && !err && <div className="p-2 text-sm text-muted">Нет результатов</div>}
                 {found.map(u => (
                   <label key={u.id} className="flex items-center gap-2 p-2">
                     <input type="checkbox" className="checkbox" checked={selectedIds.includes(u.id)} onChange={e=>{
