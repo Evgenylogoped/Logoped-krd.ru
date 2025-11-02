@@ -7,8 +7,17 @@ export default function AdminBroadcast() {
   const [url, setUrl] = React.useState('/')
   const [role, setRole] = React.useState('')
   const [city, setCity] = React.useState('')
+  const [recipients, setRecipients] = React.useState('')
   const [busy, setBusy] = React.useState(false)
   const [res, setRes] = React.useState<string>('')
+
+  React.useEffect(() => {
+    try {
+      const usp = new URLSearchParams(window.location.search)
+      const ids = usp.get('ids')
+      if (ids && !recipients.trim()) setRecipients(ids.split(',').join('\n'))
+    } catch {}
+  }, [])
 
   async function send() {
     setBusy(true)
@@ -16,6 +25,13 @@ export default function AdminBroadcast() {
     try {
       const payload: any = { title: title.trim(), body: body.trim(), url: url.trim() || '/' }
       const segment: any = {}
+      // explicit recipients: parse by lines, accept ids or emails (server expects userIds; emails ignored unless server resolves)
+      const raw = recipients.trim()
+      if (raw) {
+        const lines = raw.split(/\r?\n/).map(s=>s.trim()).filter(Boolean)
+        // Only pass as userIds; server filters existence
+        segment.userIds = lines
+      }
       if (role) segment.role = role
       if (city) segment.city = city.trim()
       if (Object.keys(segment).length) payload.segment = segment
@@ -50,6 +66,11 @@ export default function AdminBroadcast() {
       <label className="grid gap-1">
         <span className="text-sm">Текст</span>
         <textarea className="textarea" value={body} onChange={e=>setBody(e.target.value)} rows={3} />
+      </label>
+      <label className="grid gap-1">
+        <span className="text-sm">Получатели (ID по одному на строку) — необязательно</span>
+        <textarea className="textarea" value={recipients} onChange={e=>setRecipients(e.target.value)} rows={3} placeholder="userId1\nuserId2" />
+        <span className="text-xs text-muted">Если указаны — отправка только этим пользователям. Иначе используются фильтры ниже или все пользователи с активной подпиской.</span>
       </label>
       <div className="grid md:grid-cols-2 gap-2">
         <label className="grid gap-1">

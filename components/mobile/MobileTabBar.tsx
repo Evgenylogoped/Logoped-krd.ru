@@ -81,6 +81,7 @@ export default function MobileTabBar({ role: roleProp, leaderFlag: leaderFlagPro
         { href: '/admin/search', label: 'Поиск' },
         { href: '/admin/vip', label: 'VIP' },
         { href: '/admin/subscriptions', label: 'Подписки' },
+        { href: '/admin/push', label: 'Рассылка' },
         { href: '/admin/subscriptions/requests', label: '· Заявки на смену' },
         { href: '/admin/subscriptions/limit-requests', label: '· Лимит‑заявки' },
         ...(R==='SUPER_ADMIN' ? [

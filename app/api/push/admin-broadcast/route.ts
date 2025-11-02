@@ -53,6 +53,16 @@ export async function POST(req: NextRequest) {
       total += res.count ?? chunk.length
     }
 
+    // Best-effort immediate dispatch
+    try {
+      const cronKey = (process.env.CRON_PUSH_KEY || '').trim()
+      const origin = req.headers.get('origin') || `${req.nextUrl.protocol}//${req.nextUrl.host}`
+      const url = (origin && origin.startsWith('http')) ? `${origin}/api/push/dispatch` : 'http://127.0.0.1:3000/api/push/dispatch'
+      const headers: Record<string,string> = {}
+      if (cronKey) headers['X-CRON-KEY'] = cronKey
+      await fetch(url, { method: 'POST', headers })
+    } catch {}
+
     return NextResponse.json({ ok: true, enqueued: total })
   } catch (e) {
     const details = e instanceof Error ? e.message : String(e)
