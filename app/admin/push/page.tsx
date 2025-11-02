@@ -15,7 +15,7 @@ export default async function AdminPushPage() {
   return (
     <div className="container py-6 space-y-4">
       <h1 className="text-2xl font-bold">Админ · Рассылка (Web Push)</h1>
-      <div className="text-xs text-muted">build: admin-push-ui v2025-11-02-21:59 V2</div>
+      <div className="text-xs text-muted">build: admin-push-ui v2025-11-02-23:09 V3</div>
       <AdminBroadcastV2 initialUsers={initialUsers as any} />
     </div>
   )

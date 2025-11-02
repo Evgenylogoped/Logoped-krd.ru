@@ -79,104 +79,105 @@ export async function regenerateParentPassword(formData: FormData): Promise<void
 export async function createParentAndChild(formData: FormData): Promise<void> {
   const session = await getSessionSafe()
   try { await ensureLogoped(session) } catch { redirect('/logoped/clients?op=forbidden') }
-  const logopedId = (session!.user as any).id as string
-  // Ensure current logoped exists in DB (after DB reset sessions may persist)
-  const meUser = await (prisma as any).user.findUnique({ where: { id: logopedId } })
-  if (!meUser) {
-    const email = (session!.user as any).email || `restored+${logopedId}@local.test`
-    const ph = await bcryptHash(crypto.randomBytes(8).toString('hex'))
-    await (prisma as any).user.create({ data: { id: logopedId, email, passwordHash: ph, role: 'LOGOPED', name: (session!.user as any).name || 'Логопед' } })
+  try {
+    const logopedId = (session!.user as any).id as string
+    // Ensure current logoped exists in DB (after DB reset sessions may persist)
+    const meUser = await (prisma as any).user.findUnique({ where: { id: logopedId } })
+    if (!meUser) {
+      const emailSelf = (session!.user as any).email || `restored+${logopedId}@local.test`
+      const ph = await bcryptHash(crypto.randomBytes(8).toString('hex'))
+      await (prisma as any).user.create({ data: { id: logopedId, email: emailSelf, passwordHash: ph, role: 'LOGOPED', name: (session!.user as any).name || 'Логопед' } })
+    }
+    const email = normalizeEmail(formData.get('email'))
+    const fullName = String(formData.get('fullName') || '')
+    const phone = String(formData.get('phone') || '')
+    const childFirstName = String(formData.get('childFirstName') || '')
+    const childLastName = String(formData.get('childLastName') || '')
+    if (!email || !childFirstName || !childLastName) throw new Error('Заполните email и ФИО ребёнка')
+    const exists = await (prisma as any).user.findUnique({ where: { email } })
+    if (exists) {
+      redirect(`/logoped/clients?search=${encodeURIComponent(email)}&op=exists`)
+    }
+    const logopedCityRaw = ((session!.user as any).city as string | undefined) || ((meUser as any)?.city as string | undefined) || ''
+    const city = isValidCity(logopedCityRaw) ? normalizeCity(logopedCityRaw) : null
+    const temp = genTempPassword()
+    const passwordHash = await bcryptHash(temp)
+    const user = await (prisma as any).user.create({ data: { email, passwordHash, role: 'PARENT', emailVerifiedAt: new Date(), name: fullName || null, city: city || null } })
+    const parent = await (prisma as any).parent.create({ data: { userId: user.id, fullName: fullName || null, phone: phone || null, isArchived: false } })
+    await (prisma as any).parent.update({ where: { id: parent.id }, data: { visiblePasswordEncrypted: encryptVisiblePassword(temp), visiblePasswordUpdatedAt: new Date() } })
+    await (prisma as any).child.create({ data: { parentId: parent.id, logopedId, firstName: childFirstName, lastName: childLastName, isArchived: false } })
+    const token = crypto.randomBytes(24).toString('hex')
+    const expiresAt = new Date(Date.now() + 48*60*60*1000)
+    await (prisma as any).passwordToken.create({ data: { userId: user.id, token, purpose: 'SET', expiresAt } })
+    const parentUser = await (prisma as any).user.findUnique({ where: { id: parent.userId } }).catch(() => null)
+    try { if (parentUser?.email) { await sendMail({ to: parentUser.email, subject: 'Создана карточка ребёнка', text: `Ваш логопед добавил карточку ребёнка: ${childLastName} ${childFirstName}.` }) } } catch {}
+    if (email) {
+      const base = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'
+      const link = `${base}/auth/set-password/${token}`
+      try { await sendMail({ to: email, subject: 'Аккаунт создан логопедом', text: `Вам создан аккаунт на logoped-krd.\nE-mail: ${email}\nВременный пароль: ${temp}\n\nВы также можете сразу установить свой пароль по ссылке (действует 48 часов):\n${link}` }) } catch {}
+    }
+    revalidatePath('/logoped/clients')
+    redirect('/logoped/clients?op=created')
+  } catch {
+    redirect('/logoped/clients?op=fail')
   }
-  const email = normalizeEmail(formData.get('email'))
-  const fullName = String(formData.get('fullName') || '')
-  const phone = String(formData.get('phone') || '')
-  const childFirstName = String(formData.get('childFirstName') || '')
-  const childLastName = String(formData.get('childLastName') || '')
-  if (!email || !childFirstName || !childLastName) throw new Error('Заполните email и ФИО ребёнка')
-  const exists = await (prisma as any).user.findUnique({ where: { email } })
-  if (exists) {
-    // Пользователь уже существует — перенаправим на форму поиска с подсветкой статуса,
-    // чтобы логопед мог создать карточку ребёнка для существующего родителя
-    redirect(`/logoped/clients?search=${encodeURIComponent(email)}&op=exists`)
-  }
-  // Город по умолчанию: город логопеда
-  const logopedCityRaw = ((session!.user as any).city as string | undefined) || ((meUser as any)?.city as string | undefined) || ''
-  const city = isValidCity(logopedCityRaw) ? normalizeCity(logopedCityRaw) : null
-  const temp = genTempPassword()
-  const passwordHash = await bcryptHash(temp)
-  const user = await (prisma as any).user.create({ data: { email, passwordHash, role: 'PARENT', emailVerifiedAt: new Date(), name: fullName || null, city: city || null } })
-  const parent = await (prisma as any).parent.create({ data: { userId: user.id, fullName: fullName || null, phone: phone || null, isArchived: false } })
-  // store visible password for logoped
-  await (prisma as any).parent.update({
-    where: { id: parent.id },
-    data: {
-      visiblePasswordEncrypted: encryptVisiblePassword(temp),
-      visiblePasswordUpdatedAt: new Date(),
-    },
-  })
-  await (prisma as any).child.create({ data: { parentId: parent.id, logopedId, firstName: childFirstName, lastName: childLastName, isArchived: false } })
-  // create set-password token (valid 48h)
-  const token = crypto.randomBytes(24).toString('hex')
-  const expiresAt = new Date(Date.now() + 48*60*60*1000)
-  await (prisma as any).passwordToken.create({ data: { userId: user.id, token, purpose: 'SET', expiresAt } })
-  const parentUser = await (prisma as any).user.findUnique({ where: { id: parent.userId } }).catch(() => null)
-  try { if (parentUser?.email) { await sendMail({ to: parentUser.email, subject: 'Создана карточка ребёнка', text: `Ваш логопед добавил карточку ребёнка: ${childLastName} ${childFirstName}.` }) } } catch {}
-  if (email) {
-    const base = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'
-    const link = `${base}/auth/set-password/${token}`
-    try { await sendMail({ to: email, subject: 'Аккаунт создан логопедом', text: `Вам создан аккаунт на logoped-krd.\nE-mail: ${email}\nВременный пароль: ${temp}\n\nВы также можете сразу установить свой пароль по ссылке (действует 48 часов):\n${link}` }) } catch {}
-  }
-  revalidatePath('/logoped/clients')
-  redirect('/logoped/clients?op=created')
 }
 
 export async function createChildForExistingParent(formData: FormData): Promise<void> {
   const session = await getSessionSafe()
   try { await ensureLogoped(session) } catch { redirect('/logoped/clients?op=forbidden') }
-  const logopedId = (session!.user as any).id as string
-  const meUser = await (prisma as any).user.findUnique({ where: { id: logopedId } })
-  if (!meUser) {
-    const emailSelf = (session!.user as any).email || `restored+${logopedId}@local.test`
-    const ph = await bcryptHash(crypto.randomBytes(8).toString('hex'))
-    await (prisma as any).user.create({ data: { id: logopedId, email: emailSelf, passwordHash: ph, role: 'LOGOPED', name: (session!.user as any).name || 'Логопед' } })
+  try {
+    const logopedId = (session!.user as any).id as string
+    const meUser = await (prisma as any).user.findUnique({ where: { id: logopedId } })
+    if (!meUser) {
+      const emailSelf = (session!.user as any).email || `restored+${logopedId}@local.test`
+      const ph = await bcryptHash(crypto.randomBytes(8).toString('hex'))
+      await (prisma as any).user.create({ data: { id: logopedId, email: emailSelf, passwordHash: ph, role: 'LOGOPED', name: (session!.user as any).name || 'Логопед' } })
+    }
+    const email = normalizeEmail(formData.get('email'))
+    const childFirstName = String(formData.get('childFirstName') || '')
+    const childLastName = String(formData.get('childLastName') || '')
+    if (!email || !childFirstName || !childLastName) throw new Error('Заполните поля')
+    const user = await (prisma as any).user.findUnique({ where: { email } })
+    if (!user || user.role !== 'PARENT') throw new Error('Родитель не найден')
+    const parent = await (prisma as any).parent.findUnique({ where: { userId: user.id } })
+    if (!parent) throw new Error('Профиль родителя не найден')
+    await (prisma as any).parent.update({ where: { id: parent.id }, data: { isArchived: false } })
+    try { const u = await (prisma as any).user.findUnique({ where: { id: parent.userId }, select: { emailVerifiedAt: true } }); if (!u?.emailVerifiedAt) await (prisma as any).user.update({ where: { id: parent.userId }, data: { emailVerifiedAt: new Date() } }) } catch {}
+    await (prisma as any).child.create({ data: { parentId: parent.id, logopedId, firstName: childFirstName, lastName: childLastName, isArchived: false } })
+    revalidatePath('/logoped/clients')
+    redirect(`/logoped/clients?search=${encodeURIComponent(email)}&op=child_created`)
+  } catch {
+    redirect('/logoped/clients?op=fail')
   }
-  const email = normalizeEmail(formData.get('email'))
-  const childFirstName = String(formData.get('childFirstName') || '')
-  const childLastName = String(formData.get('childLastName') || '')
-  if (!email || !childFirstName || !childLastName) throw new Error('Заполните поля')
-  const user = await (prisma as any).user.findUnique({ where: { email } })
-  if (!user || user.role !== 'PARENT') throw new Error('Родитель не найден')
-  const parent = await (prisma as any).parent.findUnique({ where: { userId: user.id } })
-  if (!parent) throw new Error('Профиль родителя не найден')
-  await (prisma as any).parent.update({ where: { id: parent.id }, data: { isArchived: false } })
-  try { const u = await (prisma as any).user.findUnique({ where: { id: parent.userId }, select: { emailVerifiedAt: true } }); if (!u?.emailVerifiedAt) await (prisma as any).user.update({ where: { id: parent.userId }, data: { emailVerifiedAt: new Date() } }) } catch {}
-  await (prisma as any).child.create({ data: { parentId: parent.id, logopedId, firstName: childFirstName, lastName: childLastName, isArchived: false } })
-  revalidatePath('/logoped/clients')
-  redirect(`/logoped/clients?search=${encodeURIComponent(email)}&op=child_created`)
 }
 
 export async function attachExistingChildToMe(formData: FormData): Promise<void> {
   const session = await getSessionSafe()
   try { await ensureLogoped(session) } catch { redirect('/logoped/clients?op=forbidden') }
-  const logopedId = (session!.user as any).id as string
-  const meUser = await (prisma as any).user.findUnique({ where: { id: logopedId } })
-  if (!meUser) {
-    const emailSelf = (session!.user as any).email || `restored+${logopedId}@local.test`
-    const ph = await bcryptHash(crypto.randomBytes(8).toString('hex'))
-    await (prisma as any).user.create({ data: { id: logopedId, email: emailSelf, passwordHash: ph, role: 'LOGOPED', name: (session!.user as any).name || 'Логопед' } })
+  try {
+    const logopedId = (session!.user as any).id as string
+    const meUser = await (prisma as any).user.findUnique({ where: { id: logopedId } })
+    if (!meUser) {
+      const emailSelf = (session!.user as any).email || `restored+${logopedId}@local.test`
+      const ph = await bcryptHash(crypto.randomBytes(8).toString('hex'))
+      await (prisma as any).user.create({ data: { id: logopedId, email: emailSelf, passwordHash: ph, role: 'LOGOPED', name: (session!.user as any).name || 'Логопед' } })
+    }
+    const childId = String(formData.get('childId') || '')
+    if (!childId) throw new Error('Нет childId')
+    const child = await (prisma as any).child.findUnique({ where: { id: childId } })
+    if (!child) throw new Error('Ребёнок не найден')
+    await (prisma as any).child.update({ where: { id: childId }, data: { logopedId, isArchived: false } })
+    const parent = await (prisma as any).parent.update({ where: { id: child.parentId }, data: { isArchived: false } })
+    const parentUser = await (prisma as any).user.findUnique({ where: { id: parent.userId } }).catch(() => null)
+    if (parentUser?.email) {
+      await sendMail({ to: parentUser.email, subject: 'Ребёнок прикреплён к логопеду', text: `Ваш ребёнок (${child.lastName} ${child.firstName}) прикреплён к логопеду.` })
+    }
+    revalidatePath('/logoped/clients')
+    redirect('/logoped/clients?op=attached')
+  } catch {
+    redirect('/logoped/clients?op=fail')
   }
-  const childId = String(formData.get('childId') || '')
-  if (!childId) throw new Error('Нет childId')
-  const child = await (prisma as any).child.findUnique({ where: { id: childId } })
-  if (!child) throw new Error('Ребёнок не найден')
-  await (prisma as any).child.update({ where: { id: childId }, data: { logopedId, isArchived: false } })
-  const parent = await (prisma as any).parent.update({ where: { id: child.parentId }, data: { isArchived: false } })
-  const parentUser = await (prisma as any).user.findUnique({ where: { id: parent.userId } }).catch(() => null)
-  if (parentUser?.email) {
-    await sendMail({ to: parentUser.email, subject: 'Ребёнок прикреплён к логопеду', text: `Ваш ребёнок (${child.lastName} ${child.firstName}) прикреплён к логопеду.` })
-  }
-  revalidatePath('/logoped/clients')
-  redirect('/logoped/clients?op=attached')
 }
 
 export async function searchParent(formData: FormData): Promise<void> {
