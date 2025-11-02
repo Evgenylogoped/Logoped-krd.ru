@@ -1,6 +1,6 @@
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import AdminBroadcast from '@/components/AdminBroadcast'
+import AdminBroadcastV2 from '@/components/admin/AdminBroadcastV2'
 
 export const dynamic = 'force-dynamic'
 
@@ -11,7 +11,8 @@ export default async function AdminPushPage() {
   return (
     <div className="container py-6 space-y-4">
       <h1 className="text-2xl font-bold">Админ · Рассылка (Web Push)</h1>
-      <AdminBroadcast />
+      <div className="text-xs text-muted">build: admin-push-ui v2025-11-02-17:07 V2</div>
+      <AdminBroadcastV2 />
     </div>
   )
 }
