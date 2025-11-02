@@ -34,7 +34,7 @@ export default function AdminBroadcastV2({ initialUsers = [] as U[] }: { initial
           if (q) p.set('q', q)
           if (role) p.set('role', role)
           if (city) p.set('city', city)
-          const r = await fetch('/api/admin/users/search?' + p.toString(), { cache: 'no-store', credentials: 'include' })
+          const r = await fetch('/api/users/search?' + p.toString(), { cache: 'no-store', credentials: 'include' })
           if (!r.ok) {
             setErr('Ошибка поиска: ' + r.status)
             setFound(initialUsers)
