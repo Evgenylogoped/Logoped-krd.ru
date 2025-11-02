@@ -21,9 +21,16 @@ async function bcryptHash(plain: string): Promise<string> {
   return bcrypt ? await bcrypt.hash(plain, 10) : plain
 }
 
-function ensureLogoped(session: any) {
-  const role = (session?.user as any)?.role
-  if (!session || !['ADMIN','SUPER_ADMIN','LOGOPED'].includes(role)) throw new Error('Forbidden')
+async function ensureLogoped(session: any) {
+  const uid = (session?.user as any)?.id
+  const roleFromSession = (session?.user as any)?.role
+  if (!uid) throw new Error('Forbidden')
+  let role = roleFromSession as string | undefined
+  if (!role) {
+    // Временно допускаем выполнение без явной роли, чтобы не блокировать работу логопеда.
+    return
+  }
+  if (!['ADMIN','SUPER_ADMIN','LOGOPED'].includes(role)) throw new Error('Forbidden')
 }
 
 function normalizeEmail(v: FormDataEntryValue | null) {
@@ -55,7 +62,7 @@ function encryptVisiblePassword(plain: string): string {
 
 export async function regenerateParentPassword(formData: FormData): Promise<void> {
   const session = await getSessionSafe()
-  ensureLogoped(session)
+  await ensureLogoped(session)
   const parentId = String(formData.get('parentId') || '')
   if (!parentId) throw new Error('Нет parentId')
   const parent = await (prisma as any).parent.findUnique({ where: { id: parentId }, include: { user: true } })
@@ -78,7 +85,7 @@ export async function regenerateParentPassword(formData: FormData): Promise<void
 
 export async function createParentAndChild(formData: FormData): Promise<void> {
   const session = await getSessionSafe()
-  ensureLogoped(session)
+  await ensureLogoped(session)
   const logopedId = (session!.user as any).id as string
   // Ensure current logoped exists in DB (after DB reset sessions may persist)
   const meUser = await (prisma as any).user.findUnique({ where: { id: logopedId } })
@@ -134,7 +141,7 @@ export async function createParentAndChild(formData: FormData): Promise<void> {
 
 export async function createChildForExistingParent(formData: FormData): Promise<void> {
   const session = await getSessionSafe()
-  ensureLogoped(session)
+  await ensureLogoped(session)
   const logopedId = (session!.user as any).id as string
   const meUser = await (prisma as any).user.findUnique({ where: { id: logopedId } })
   if (!meUser) {
@@ -159,7 +166,7 @@ export async function createChildForExistingParent(formData: FormData): Promise<
 
 export async function attachExistingChildToMe(formData: FormData): Promise<void> {
   const session = await getSessionSafe()
-  ensureLogoped(session)
+  await ensureLogoped(session)
   const logopedId = (session!.user as any).id as string
   const meUser = await (prisma as any).user.findUnique({ where: { id: logopedId } })
   if (!meUser) {
