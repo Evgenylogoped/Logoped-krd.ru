@@ -30,7 +30,9 @@ export async function POST(req: NextRequest) {
             if (managerId && managerId !== pr.logopedId) targets.push(managerId)
             if (ownerId && ownerId !== pr.logopedId && ownerId !== managerId) targets.push(ownerId)
             if (targets.length) {
-              const fio = `${(me?.lastName||'').toString().trim()} ${((me?.firstName||'')||'').toString().trim().slice(0,1).toUpperCase()}.${((me?.middleName||'')||'').toString().trim().slice(0,1).toUpperCase() || ''}`.trim()
+              const first = String((me as any)?.firstName || '').trim()
+              const last = String((me as any)?.lastName || '').trim()
+              const fio = `${first || (me as any)?.name || ''} ${last ? (last[0].toUpperCase()+'.') : ''}`.trim()
               const body = `${fio} отменил(а) заявку на выплату`
               await (prisma as any).pushEventQueue.createMany({ data: targets.map(t => ({ userId: t, type: 'PAYMENT_STATUS', payload: { title: 'Отмена заявки на выплату', body, url: 'https://logoped-krd.ru/admin/finance/payouts' }, scheduledAt: new Date(), attempt: 0 })) })
             }
@@ -51,7 +53,9 @@ export async function POST(req: NextRequest) {
           if (managerId && managerId !== userId) targets.push(managerId)
           if (ownerId && ownerId !== userId && ownerId !== managerId) targets.push(ownerId)
           if (targets.length) {
-            const fio = `${(me?.lastName||'').toString().trim()} ${((me?.firstName||'')||'').toString().trim().slice(0,1).toUpperCase()}.${((me?.middleName||'')||'').toString().trim().slice(0,1).toUpperCase() || ''}`.trim()
+            const first = String((me as any)?.firstName || '').trim()
+            const last = String((me as any)?.lastName || '').trim()
+            const fio = `${first || (me as any)?.name || ''} ${last ? (last[0].toUpperCase()+'.') : ''}`.trim()
             const body = `${fio} отменил(а) все ожидающие заявки на выплату`
             await (prisma as any).pushEventQueue.createMany({ data: targets.map(t => ({ userId: t, type: 'PAYMENT_STATUS', payload: { title: 'Отмена заявок на выплату', body, url: 'https://logoped-krd.ru/admin/finance/payouts' }, scheduledAt: new Date(), attempt: 0 })) })
           }

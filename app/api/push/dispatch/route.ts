@@ -68,7 +68,8 @@ export async function POST(req: NextRequest) {
         await prisma.pushEventQueue.delete({ where: { id: ev.id } })
         continue
       }
-      if (prefs?.quietHoursEnabled) {
+      // Defer during quiet hours only for non-chat types; chat (MSG_NEW) should arrive immediately
+      if (ev.type !== 'MSG_NEW' && prefs?.quietHoursEnabled === true) {
         const from = prefs.quietFromMsk ?? 22
         const to = prefs.quietToMsk ?? 8
         if (inQuietHoursMsk(Date.now(), from, to)) {
