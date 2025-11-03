@@ -79,9 +79,13 @@ export default function AdminBroadcastV2({ initialUsers = [] as U[] }: { initial
   }
 
   return (
-    <div className="rounded border p-3 space-y-2" style={{ background: 'var(--card-bg)' }}>
-      <div className="font-semibold">Админ‑рассылка (Web Push) · V3</div>
-      <div className="grid md:grid-cols-2 gap-2">
+    <div className="card shadow-sm">
+      <div className="card-header">
+        <div className="card-title">Админ‑рассылка (Web Push) · V3</div>
+        <div className="card-subtitle text-xs text-muted">Отправляется только пользователям с активной подпиской</div>
+      </div>
+      <div className="card-body space-y-3">
+      <div className="grid md:grid-cols-2 gap-3">
         <label className="grid gap-1">
           <span className="text-sm">Заголовок</span>
           <input className="input" value={title} onChange={e=>setTitle(e.target.value)} />
@@ -93,7 +97,7 @@ export default function AdminBroadcastV2({ initialUsers = [] as U[] }: { initial
       </div>
       <label className="grid gap-1">
         <span className="text-sm">Текст</span>
-        <textarea className="textarea" value={body} onChange={e=>setBody(e.target.value)} rows={3} />
+        <textarea className="textarea" value={body} onChange={e=>setBody(e.target.value)} rows={4} />
       </label>
       <div className="grid gap-2">
         <label className="inline-flex items-center gap-2">
@@ -101,8 +105,8 @@ export default function AdminBroadcastV2({ initialUsers = [] as U[] }: { initial
           <span>Отправить всем (игнорировать поиск и выбранных)</span>
         </label>
         {!sendAll && (
-          <div className="grid gap-2">
-            <div className="grid md:grid-cols-2 gap-2">
+          <div className="grid gap-3">
+            <div className="grid md:grid-cols-2 gap-3">
               <label className="grid gap-1">
                 <span className="text-sm">Поиск пользователей (имя/email/телефон)</span>
                 <input className="input" value={q} onChange={e=>setQ(e.target.value)} placeholder="Начните вводить..." />
@@ -118,15 +122,15 @@ export default function AdminBroadcastV2({ initialUsers = [] as U[] }: { initial
               <div className="flex items-center justify-between gap-2">
                 <span className="text-sm">Результаты ({found.length}) · Выбрано: {selectedIds.length}</span>
                 <div className="flex items-center gap-2">
-                  <button type="button" className="btn btn-xs" onClick={()=>setSelectedIds(prev=>Array.from(new Set([...prev, ...found.map(u=>u.id)])))}>Выбрать все в выдаче</button>
-                  <button type="button" className="btn btn-xs" onClick={()=>setSelectedIds([])}>Снять выбор</button>
+                  <button type="button" className="btn btn-outline btn-xs" onClick={()=>setSelectedIds(prev=>Array.from(new Set([...prev, ...found.map(u=>u.id)])))}>Выбрать все в выдаче</button>
+                  <button type="button" className="btn btn-ghost btn-xs" onClick={()=>setSelectedIds([])}>Снять выбор</button>
                 </div>
               </div>
               <div className="max-h-96 overflow-auto border rounded divide-y bg-white">
                 {err && <div className="p-2 text-xs text-red-600">{err}</div>}
                 {found.length === 0 && !err && <div className="p-2 text-sm text-muted">Нет результатов</div>}
                 {found.map(u => (
-                  <label key={u.id} className="flex items-center gap-2 p-2">
+                  <label key={u.id} className="flex items-center gap-2 p-2 hover:bg-black/5">
                     <input type="checkbox" className="checkbox" checked={selectedIds.includes(u.id)} onChange={e=>{
                       setSelectedIds(prev => e.target.checked ? [...new Set([...prev, u.id])] : prev.filter(x=>x!==u.id))
                     }} />
@@ -141,7 +145,7 @@ export default function AdminBroadcastV2({ initialUsers = [] as U[] }: { initial
           </div>
         )}
       </div>
-      <div className="grid md:grid-cols-2 gap-2">
+      <div className="grid md:grid-cols-2 gap-3">
         <label className="grid gap-1">
           <span className="text-sm">Фильтр по роли (необязательно)</span>
           <select className="input" value={role} onChange={e=>setRole(e.target.value)}>
@@ -158,11 +162,12 @@ export default function AdminBroadcastV2({ initialUsers = [] as U[] }: { initial
           <input className="input" value={city} onChange={e=>setCity(e.target.value)} />
         </label>
       </div>
-      <div className="flex items-center gap-2">
-        <button className="btn btn-secondary" disabled={busy || !title.trim() || !body.trim()} onClick={send}>Отправить</button>
-        <div className="text-xs text-muted">Отправляется только тем пользователям, у кого есть активные подписки</div>
+      <div className="flex items-center gap-3">
+        <button className="btn btn-primary" disabled={busy || !title.trim() || !body.trim()} onClick={send}>Отправить</button>
+        <div className="text-xs text-muted">Проверяйте, что у пользователей есть активные подписки</div>
       </div>
-      {res && <div className="text-sm">{res}</div>}
+      {res && <div className="text-sm mt-1">{res}</div>}
+      </div>
     </div>
   )
 }
