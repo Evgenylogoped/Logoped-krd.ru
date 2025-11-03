@@ -57,10 +57,10 @@ export async function POST(req: NextRequest) {
       const allowByType = (() => {
         if (!prefs) return true
         switch (ev.type) {
-          case 'MSG_NEW': return prefs.msgNew
-          case 'BOOKING_UPDATE': return prefs.bookingUpdate
-          case 'PAYMENT_STATUS': return prefs.paymentStatus
-          case 'ADMIN_BROADCAST': return prefs.adminBroadcast
+          case 'MSG_NEW': return prefs.msgNew !== false
+          case 'BOOKING_UPDATE': return prefs.bookingUpdate !== false
+          case 'PAYMENT_STATUS': return prefs.paymentStatus !== false
+          case 'ADMIN_BROADCAST': return prefs.adminBroadcast !== false
           default: return true
         }
       })()

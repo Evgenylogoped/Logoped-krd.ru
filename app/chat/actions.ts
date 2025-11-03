@@ -119,7 +119,6 @@ export async function markReadOnFocus(conversationId: string) {
   if (!session?.user) return
   const me = String((session.user as { id?: string }).id || '')
   await prisma.conversationParticipant.update({ where: { conversationId_userId: { conversationId, userId: me } }, data: { lastReadAt: new Date() } })
-  revalidatePath('/chat')
 }
 
 export async function getOrCreateConversation(targetUserId: string, childId?: string) {

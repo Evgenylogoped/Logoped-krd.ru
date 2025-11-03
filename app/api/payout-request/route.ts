@@ -130,6 +130,22 @@ export async function POST(req: NextRequest) {
           attempt: 0,
         }
       })
+      // Also notify leaders (branch manager and company owner)
+      try {
+        const me = await (prisma as any).user.findUnique({ where: { id: userId }, include: { branch: { include: { company: true } } } })
+        const amountStr = `${Number(finalAmount||0).toLocaleString('ru-RU')} ₽`
+        const dateStr = new Date(created.createdAt).toLocaleDateString('ru-RU')
+        const targets: string[] = []
+        const managerId = (me as any)?.branch?.managerId as string | undefined
+        const ownerId = (me as any)?.branch?.company?.ownerId as string | undefined
+        if (managerId && managerId !== userId) targets.push(managerId)
+        if (ownerId && ownerId !== userId && ownerId !== managerId) targets.push(ownerId)
+        if (targets.length) {
+          const fio = `${(me?.lastName||'').toString().trim()} ${((me?.firstName||'')||'').toString().trim().slice(0,1).toUpperCase()}.${((me?.middleName||'')||'').toString().trim().slice(0,1).toUpperCase() || ''}`.trim()
+          const body = `${fio} запросил(а) выплату на сумму ${amountStr} от ${dateStr}`
+          await (prisma as any).pushEventQueue.createMany({ data: targets.map(t => ({ userId: t, type: 'PAYMENT_STATUS', payload: { title: 'Запрос выплаты от логопеда', body, url: 'https://logoped-krd.ru/admin/finance/payouts' }, scheduledAt: new Date(), attempt: 0 })) })
+        }
+      } catch {}
     } catch {}
 
     const proto = req.headers.get('x-forwarded-proto') || 'https'

@@ -51,6 +51,14 @@ export async function POST(req: NextRequest) {
       const payload = { title: 'Вам пришло сообщение в чат', body: `от ${authorShort}, ${snippet}${snippet ? '…' : ''} Просмотреть`, url: `/chat?c=${conv.id}` }
       const data = (recips || []).map((r: any) => ({ userId: String(r.userId), type: 'MSG_NEW', payload, scheduledAt: new Date(), attempt: 0 }))
       if (data.length) { try { await (prisma as any).pushEventQueue.createMany({ data, skipDuplicates: true }) } catch {} }
+      // best-effort: trigger dispatcher to reduce delay
+      try {
+        const cronKey = (process.env.CRON_PUSH_KEY || '').trim()
+        const origin = req.headers.get('origin') || `${req.nextUrl.protocol}//${req.nextUrl.host}`
+        if (cronKey && origin && origin.startsWith('http')) {
+          fetch(`${origin}/api/push/dispatch`, { method: 'POST', headers: { 'X-CRON-KEY': cronKey } }).catch(() => {})
+        }
+      } catch {}
     } catch {}
     // mark my lastReadAt (best-effort)
     try { await (prisma as any).conversationParticipant.update({ where: { conversationId_userId: { conversationId: conv.id, userId } }, data: { lastReadAt: new Date() } }) } catch {}
