@@ -121,7 +121,7 @@ export async function createParentAndChild(formData: FormData): Promise<void> {
     const user = await (prisma as any).user.create({ data: { email, passwordHash, role: 'PARENT', emailVerifiedAt: new Date(), name: fullName || null, city: city || null } })
     const parent = await (prisma as any).parent.create({ data: { userId: user.id, fullName: fullName || null, phone: phone || null, isArchived: false } })
     await (prisma as any).parent.update({ where: { id: parent.id }, data: { visiblePasswordEncrypted: encryptVisiblePassword(temp), visiblePasswordUpdatedAt: new Date() } })
-    await (prisma as any).child.create({ data: { parentId: parent.id, logopedId, firstName: childFirstName, lastName: childLastName, isArchived: false } })
+    const child = await (prisma as any).child.create({ data: { parentId: parent.id, logopedId, firstName: childFirstName, lastName: childLastName, isArchived: false } })
     try {
       const token = crypto.randomBytes(24).toString('hex')
       const expiresAt = new Date(Date.now() + 48*60*60*1000)
@@ -134,8 +134,8 @@ export async function createParentAndChild(formData: FormData): Promise<void> {
     } catch {}
     const parentUser = await (prisma as any).user.findUnique({ where: { id: parent.userId } }).catch(() => null)
     try { if (parentUser?.email) { await sendMail({ to: parentUser.email, subject: 'Создана карточка ребёнка', text: `Ваш логопед добавил карточку ребёнка: ${childLastName} ${childFirstName}.` }) } } catch {}
-    revalidatePath('/logoped/clients')
-    redirect(`/logoped/clients?search=${encodeURIComponent(email)}&op=created`)
+    revalidatePath(`/logoped/child/${child.id}`)
+    redirect(`/logoped/child/${child.id}?tab=main&created=1`)
   } catch {
     redirect('/logoped/clients?op=fail')
   }

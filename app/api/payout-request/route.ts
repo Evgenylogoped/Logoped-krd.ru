@@ -34,8 +34,10 @@ export async function POST(req: NextRequest) {
         }, 0)
         await (prisma as any).payoutRequest.update({ where: { id: (existing as any).id }, data: { finalAmount: finalOld } })
       } catch {}
-      const base = req.nextUrl.origin
-      return NextResponse.redirect(new URL('/logoped/org-finance?pending=1', base), 303)
+      const proto = req.headers.get('x-forwarded-proto') || 'https'
+      const host = req.headers.get('x-forwarded-host') || req.headers.get('host') || 'logoped-krd.ru'
+      const origin = `${proto}://${host}`
+      return NextResponse.redirect(new URL('/logoped/org-finance?pending=1', origin), 303)
     }
 
     // Считаем сумму заявки по урокам: settledAt != null, payoutStatus='NONE', не персональные
@@ -118,10 +120,14 @@ export async function POST(req: NextRequest) {
       }
     })
 
-    const base = req.nextUrl.origin
-    return NextResponse.redirect(new URL('/logoped/org-finance?sent=1', base), 303)
+    const proto = req.headers.get('x-forwarded-proto') || 'https'
+    const host = req.headers.get('x-forwarded-host') || req.headers.get('host') || 'logoped-krd.ru'
+    const origin = `${proto}://${host}`
+    return NextResponse.redirect(new URL('/logoped/org-finance?sent=1', origin), 303)
   } catch {
-    const base = req.nextUrl.origin
-    return NextResponse.redirect(new URL('/logoped/org-finance?error=1', base), 303)
+    const proto = req.headers.get('x-forwarded-proto') || 'https'
+    const host = req.headers.get('x-forwarded-host') || req.headers.get('host') || 'logoped-krd.ru'
+    const origin = `${proto}://${host}`
+    return NextResponse.redirect(new URL('/logoped/org-finance?error=1', origin), 303)
   }
 }
