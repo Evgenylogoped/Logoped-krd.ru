@@ -102,10 +102,22 @@ export async function listUnifiedConversations(me: string): Promise<UnifiedConve
 }
 
 export async function countTotalUnread(me: string) {
-  const convs = await prisma.conversation.findMany({ where: { participants: { some: { userId: me } } }, select: { id: true } })
-  let total = 0
-  for (const c of convs) total += await countUnreadFor(me, c.id)
-  return total
+  // Count messages not authored by me, in conversations where I participate,
+  // and with createdAt greater than my lastReadAt for that conversation.
+  const rows = await (prisma as any).$queryRaw<{ count: bigint }[]>`
+    SELECT COUNT(*)::bigint AS count
+    FROM "Message" m
+    WHERE m."authorId" <> ${me}
+      AND EXISTS (
+        SELECT 1
+        FROM "ConversationParticipant" cp
+        WHERE cp."conversationId" = m."conversationId"
+          AND cp."userId" = ${me}
+          AND (cp."lastReadAt" IS NULL OR m."createdAt" > cp."lastReadAt")
+      )
+  `
+  const cnt = Array.isArray(rows) && rows[0] ? Number(rows[0].count || 0) : 0
+  return cnt
 }
 
 // Ensure a group conversation for a logoped and keep it in sync with active children parents
