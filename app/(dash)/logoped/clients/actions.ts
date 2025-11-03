@@ -5,14 +5,11 @@ import { redirect } from 'next/navigation'
 import { sendMail } from '@/lib/mail'
 import crypto from 'node:crypto'
 import { isValidCity, normalizeCity } from '@/lib/cities'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
 
 async function getSessionSafe(): Promise<any> {
-  const na = 'next-auth' as const
-  const mod = await import(na as any).catch(() => null as any)
-  const auth = await import('@/lib/auth').catch(() => null as any)
-  const gss: any = mod?.getServerSession
-  const opts = auth?.authOptions
-  return (typeof gss === 'function' && opts) ? await gss(opts) : null
+  try { return await getServerSession(authOptions as any) } catch { return null }
 }
 
 async function bcryptHash(plain: string): Promise<string> {
@@ -22,10 +19,29 @@ async function bcryptHash(plain: string): Promise<string> {
 }
 
 async function ensureLogoped(session: any) {
-  const uid = (session?.user as any)?.id
-  if (!uid) throw new Error('Forbidden')
-  // Временное послабление: пускаем всех аутентифицированных (роль не проверяем)
+  // 1) если уже есть id — достаточно
+  const directId = (session?.user as any)?.id as string | undefined
+  if (directId) return
+  // 2) иначе пробуем найти по email
+  const email = (session?.user as any)?.email as string | undefined
+  if (!email) throw new Error('Forbidden')
+  let u = await (prisma as any).user.findUnique({ where: { email } })
+  // 3) если не нашли — создаём логопеда по данным из сессии (автовосстановление)
+  if (!u) {
+    const name = (session?.user as any)?.name || 'Логопед'
+    const ph = await bcryptHash(crypto.randomBytes(8).toString('hex'))
+    u = await (prisma as any).user.create({ data: { email, name, role: 'LOGOPED', passwordHash: ph } })
+  }
   return
+}
+
+async function resolveCurrentUserId(session: any): Promise<string | null> {
+  const uid = (session?.user as any)?.id as string | undefined
+  if (uid) return uid
+  const email = (session?.user as any)?.email as string | undefined
+  if (!email) return null
+  const u = await (prisma as any).user.findUnique({ where: { email } })
+  return (u?.id as string) || null
 }
 
 function normalizeEmail(v: FormDataEntryValue | null) {
@@ -80,7 +96,7 @@ export async function createParentAndChild(formData: FormData): Promise<void> {
   const session = await getSessionSafe()
   try { await ensureLogoped(session) } catch { redirect('/logoped/clients?op=forbidden') }
   try {
-    const logopedId = (session!.user as any).id as string
+    const logopedId = (await resolveCurrentUserId(session)) as string
     // Ensure current logoped exists in DB (after DB reset sessions may persist)
     const meUser = await (prisma as any).user.findUnique({ where: { id: logopedId } })
     if (!meUser) {
@@ -106,16 +122,18 @@ export async function createParentAndChild(formData: FormData): Promise<void> {
     const parent = await (prisma as any).parent.create({ data: { userId: user.id, fullName: fullName || null, phone: phone || null, isArchived: false } })
     await (prisma as any).parent.update({ where: { id: parent.id }, data: { visiblePasswordEncrypted: encryptVisiblePassword(temp), visiblePasswordUpdatedAt: new Date() } })
     await (prisma as any).child.create({ data: { parentId: parent.id, logopedId, firstName: childFirstName, lastName: childLastName, isArchived: false } })
-    const token = crypto.randomBytes(24).toString('hex')
-    const expiresAt = new Date(Date.now() + 48*60*60*1000)
-    await (prisma as any).passwordToken.create({ data: { userId: user.id, token, purpose: 'SET', expiresAt } })
+    try {
+      const token = crypto.randomBytes(24).toString('hex')
+      const expiresAt = new Date(Date.now() + 48*60*60*1000)
+      await (prisma as any).passwordToken.create({ data: { userId: user.id, token, purpose: 'SET', expiresAt } })
+      if (email) {
+        const base = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'
+        const link = `${base}/auth/set-password/${token}`
+        try { await sendMail({ to: email, subject: 'Аккаунт создан логопедом', text: `Вам создан аккаунт на logoped-krd.\nE-mail: ${email}\nВременный пароль: ${temp}\n\nВы также можете сразу установить свой пароль по ссылке (действует 48 часов):\n${link}` }) } catch {}
+      }
+    } catch {}
     const parentUser = await (prisma as any).user.findUnique({ where: { id: parent.userId } }).catch(() => null)
     try { if (parentUser?.email) { await sendMail({ to: parentUser.email, subject: 'Создана карточка ребёнка', text: `Ваш логопед добавил карточку ребёнка: ${childLastName} ${childFirstName}.` }) } } catch {}
-    if (email) {
-      const base = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'
-      const link = `${base}/auth/set-password/${token}`
-      try { await sendMail({ to: email, subject: 'Аккаунт создан логопедом', text: `Вам создан аккаунт на logoped-krd.\nE-mail: ${email}\nВременный пароль: ${temp}\n\nВы также можете сразу установить свой пароль по ссылке (действует 48 часов):\n${link}` }) } catch {}
-    }
     revalidatePath('/logoped/clients')
     redirect('/logoped/clients?op=created')
   } catch {
