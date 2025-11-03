@@ -1,6 +1,7 @@
 "use client"
 import React from 'react'
 
+<<<<<<< HEAD
 export default function AdminBroadcast() {
   const [title, setTitle] = React.useState('Инфо')
   const [body, setBody] = React.useState('Тестовое админ‑сообщение')
@@ -66,11 +67,35 @@ export default function AdminBroadcast() {
     } finally {
       setBusy(false)
     }
+=======
+export default function AdminBroadcast(){
+  const [title,setTitle]=React.useState('Инфо')
+  const [body,setBody]=React.useState('Тестовое админ‑сообщение')
+  const [url,setUrl]=React.useState('/')
+  const [res,setRes]=React.useState('')
+  const [busy,setBusy]=React.useState(false)
+
+  async function send(){
+    setBusy(true); setRes('')
+    try{
+      const r = await fetch('/api/push/admin-broadcast',{
+        method:'POST', headers:{'content-type':'application/json'}, credentials:'include',
+        body: JSON.stringify({ title: title.trim(), body: body.trim(), url: url.trim() || '/' })
+      })
+      const j = await r.json().catch(()=>null)
+      if(r.ok) setRes(`Отправлено в очередь: ${j?.enqueued ?? '?'} пользователей`)
+      else setRes(j?.error || 'Ошибка отправки')
+    }catch{ setRes('Ошибка сети') } finally{ setBusy(false) }
+>>>>>>> 1d65c65 (fix(clean): remove next/dynamic ssr:false; add AdminBroadcast client component; unblock Next build)
   }
 
   return (
     <div className="rounded border p-3 space-y-2" style={{ background: 'var(--card-bg)' }}>
+<<<<<<< HEAD
       <div className="font-semibold">Админ‑рассылка (Web Push)</div>
+=======
+      <div className="font-semibold">Админ‑рассылка (Web Push) · Lite</div>
+>>>>>>> 1d65c65 (fix(clean): remove next/dynamic ssr:false; add AdminBroadcast client component; unblock Next build)
       <div className="grid md:grid-cols-2 gap-2">
         <label className="grid gap-1">
           <span className="text-sm">Заголовок</span>
@@ -85,6 +110,7 @@ export default function AdminBroadcast() {
         <span className="text-sm">Текст</span>
         <textarea className="textarea" value={body} onChange={e=>setBody(e.target.value)} rows={3} />
       </label>
+<<<<<<< HEAD
       <div className="grid gap-2">
         <label className="inline-flex items-center gap-2">
           <input type="checkbox" className="checkbox" checked={sendAll} onChange={e=>setSendAll(e.target.checked)} />
@@ -146,6 +172,12 @@ export default function AdminBroadcast() {
         <div className="text-xs text-muted">Отправляется только тем пользователям, у кого есть активные подписки</div>
       </div>
       {res && <div className="text-sm">{res}</div>}
+=======
+      <div className="flex items-center gap-2">
+        <button className="btn btn-secondary" disabled={busy || !title.trim() || !body.trim()} onClick={send}>Отправить</button>
+        {res && <div className="text-sm">{res}</div>}
+      </div>
+>>>>>>> 1d65c65 (fix(clean): remove next/dynamic ssr:false; add AdminBroadcast client component; unblock Next build)
     </div>
   )
 }

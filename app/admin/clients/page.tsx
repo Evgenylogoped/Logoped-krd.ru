@@ -2,11 +2,10 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { bulkDeleteParents, deleteParent, restoreParent, updateParentAdmin, updateChildLogoped, requestTransferByEmail, deleteChild as archiveChild, restoreChild } from './actions'
-import dynamic from 'next/dynamic'
-const AdminBroadcast = dynamic(() => import('@/components/AdminBroadcast'), { ssr: false })
 import VipBadge from '@/components/VipBadge'
 import ConfirmButton from '@/components/ConfirmButton'
 import SelectAll from '@/components/SelectAll'
+import AdminBroadcast from '@/components/AdminBroadcast'
 
 export default async function AdminClientsPage({ searchParams }: { searchParams?: Promise<Record<string, string | string[]>> }) {
   const session = await getServerSession(authOptions)
