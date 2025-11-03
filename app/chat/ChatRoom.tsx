@@ -352,7 +352,21 @@ let typingLabel = typingUsers.length > 0 ? 'Печатает...' : ''
             {ctx.msg.authorId === selfId && (
               <>
                 <button className="block w-full text-left px-3 py-1 hover:bg-gray-50" onClick={()=>{ setEditId(ctx.msg!.id); setInput(ctx.msg!.body); setCtx({open:false,x:0,y:0,msg:null}) }}>Редактировать</button>
-                <button className="block w-full text-left px-3 py-1 hover:bg-gray-50 text-rose-600" onClick={async()=>{ await deleteMessage(ctx.msg!.id); setCtx({open:false,x:0,y:0,msg:null}); poll() }}>Удалить</button>
+                <button
+                  className="block w-full text-left px-3 py-1 hover:bg-gray-50 text-rose-600"
+                  onClick={async()=>{
+                    try {
+                      await deleteMessage(ctx.msg!.id)
+                      setCtx({open:false,x:0,y:0,msg:null})
+                      await poll()
+                    } catch (e) {
+                      const m = (e && typeof e === 'object' && 'message' in e) ? String((e as any).message||'') : 'Ошибка удаления сообщения'
+                      if (typeof window !== 'undefined') window.alert(m || 'Ошибка удаления сообщения')
+                    }
+                  }}
+                >
+                  Удалить
+                </button>
               </>
             )}
           </div>
