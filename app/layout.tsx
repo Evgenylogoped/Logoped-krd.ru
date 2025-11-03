@@ -3,6 +3,7 @@ import { Suspense } from "react";
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { Inter, Roboto_Mono } from "next/font/google";
+import '@/lib/pushWorker'
 import "./globals.css";
 // Auth/UI providers are imported dynamically when NEXTAUTH_SECRET is available
 // next-auth can be unavailable during static builds; avoid hard import for TS
@@ -114,6 +115,15 @@ export default async function RootLayout({
         data-user-role={(s?.user as any)?.role || ''}
         data-authed={isAuthed ? '1' : ''}
       >
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `try{(function(){
+              var hardReload=function(){ try{localStorage.setItem('lastReload', String(Date.now()))}catch(e){}; location.reload() };
+              window.addEventListener('error',function(e){ try{var m=(e&&e.message?e.message:'')+''; if(m.includes('ChunkLoadError')||m.includes('Loading CSS chunk')||m.includes('Incorrect contents fetched')){ hardReload() }}catch(_e){} }, true);
+              window.addEventListener('unhandledrejection',function(e){ try{var r=e&&e.reason?e.reason:''; var m=(r&&r.message?r.message:r)+''; if(m.includes('ChunkLoadError')||m.includes('Loading CSS chunk')||m.includes('Incorrect contents fetched')){ hardReload() }}catch(_e){} });
+            })()}catch(e){}`
+          }}
+        />
         {/* iOS zoom guard */}
         <script
           dangerouslySetInnerHTML={{

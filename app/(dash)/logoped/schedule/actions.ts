@@ -5,7 +5,7 @@ import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { sendMail } from '@/lib/mail'
 import { redirect } from 'next/navigation'
-import { formatFioShort, formatTimeMsk, formatDateTimeMsk } from '@/lib/pushText'
+import { formatFioShort, formatTimeMsk, formatDateTimeMsk, formatTimeWithWeekdayMsk } from '@/lib/pushText'
 
 function ensureLogoped(session: unknown): asserts session is { user: { role?: string; id?: string } } {
   const s = session as { user?: { role?: string; id?: string } } | null
@@ -551,16 +551,29 @@ export async function enrollChildToLesson(formData: FormData): Promise<void> {
       const lesson = await prisma.lesson.findUnique({ where: { id: lessonId } })
       const child = await prisma.child.findUnique({ where: { id: childId }, include: { parent: { include: { user: true } } } })
       const holder = child ? `${child.lastName || ''} ${child.firstName || ''}`.trim() : 'ребёнок'
-      const when = lesson ? formatTimeMsk(lesson.startsAt as any) : ''
+      const when = lesson ? formatTimeWithWeekdayMsk(lesson.startsAt as any) : ''
       const me = await prisma.user.findUnique({ where: { id: userId } })
       // push to logoped (self)
       await (prisma as any).pushEventQueue.create({ data: { userId, type: 'BOOKING_UPDATE', payload: { title: 'Вы спланировали занятие', body: `с ${holder} в ${when}`, url: '/logoped/schedule' }, scheduledAt: new Date(), attempt: 0 } })
       // push to parent
       const parentUserId = (child?.parent as any)?.userId as string | undefined
       if (parentUserId) {
-        const whenFull = lesson ? `${formatTimeMsk(lesson.startsAt as any)} ${new Date(lesson.startsAt as any).toLocaleDateString('ru-RU')}` : ''
+        const whenFull = lesson ? `${formatTimeWithWeekdayMsk(lesson.startsAt as any)} ${new Date(lesson.startsAt as any).toLocaleDateString('ru-RU')}` : ''
         await (prisma as any).pushEventQueue.create({ data: { userId: parentUserId, type: 'BOOKING_UPDATE', payload: { title: 'Запланировано занятие', body: `с ${holder} в ${whenFull}`, url: '/parent/schedule' }, scheduledAt: new Date(), attempt: 0 } })
       }
+      // notify leaders about subordinate planning
+      try {
+        const me = await prisma.user.findUnique({ where: { id: userId }, include: { branch: { include: { company: true } } } })
+        const managerId = (me?.branch as any)?.managerId as string | undefined
+        const ownerId = (me?.branch as any)?.company?.ownerId as string | undefined
+        const whenFull = lesson ? formatDateTimeMsk(lesson.startsAt as any) : ''
+        const fio = `${me?.lastName||''} ${((me?.firstName||'')||'').toString().trim().slice(0,1).toUpperCase()}.${((me?.middleName||'')||'').toString().trim().slice(0,1).toUpperCase() || ''}`.trim()
+        const body = `Логопед ${fio} запланировал(а) занятие на ${whenFull}`
+        const targets = [managerId, ownerId].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i && v !== userId) as string[]
+        if (targets.length) {
+          await (prisma as any).pushEventQueue.createMany({ data: targets.map(t => ({ userId: t, type: 'BOOKING_UPDATE', payload: { title: 'Изменение в расписании подчинённого', body, url: '/logoped/schedule' }, scheduledAt: new Date(), attempt: 0 })) })
+        }
+      } catch {}
     } catch {}
   }
   revalidatePath('/logoped/schedule')
@@ -595,6 +608,19 @@ export async function cancelEnrollment(formData: FormData): Promise<void> {
       const whenFull = lesson ? `${formatTimeMsk(lesson.startsAt as any)} ${new Date(lesson.startsAt as any).toLocaleDateString('ru-RU')}` : ''
       await (prisma as any).pushEventQueue.create({ data: { userId: parentUserId, type: 'BOOKING_UPDATE', payload: { title: 'Занятие отменено', body: `с ${holder} на ${whenFull} ОТМЕНЕНО`, url: '/parent/schedule' }, scheduledAt: new Date(), attempt: 0 } })
     }
+    // notify leaders about subordinate cancellation
+    try {
+      const me = await prisma.user.findUnique({ where: { id: userId }, include: { branch: { include: { company: true } } } })
+      const managerId = (me?.branch as any)?.managerId as string | undefined
+      const ownerId = (me?.branch as any)?.company?.ownerId as string | undefined
+      const whenFull = lesson ? formatDateTimeMsk(lesson.startsAt as any) : ''
+      const fio = `${me?.lastName||''} ${((me?.firstName||'')||'').toString().trim().slice(0,1).toUpperCase()}.${((me?.middleName||'')||'').toString().trim().slice(0,1).toUpperCase() || ''}`.trim()
+      const body = `Логопед ${fio} отменил(а) занятие на ${whenFull}`
+      const targets = [managerId, ownerId].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i && v !== userId) as string[]
+      if (targets.length) {
+        await (prisma as any).pushEventQueue.createMany({ data: targets.map(t => ({ userId: t, type: 'BOOKING_UPDATE', payload: { title: 'Изменение в расписании подчинённого', body, url: '/logoped/schedule' }, scheduledAt: new Date(), attempt: 0 })) })
+      }
+    } catch {}
   } catch {}
   revalidatePath('/logoped/schedule')
 }

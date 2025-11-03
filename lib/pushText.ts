@@ -39,6 +39,16 @@ export function formatDateMsk(date: Date | string): string {
 }
 export function formatDateTimeMsk(date: Date | string): string { return `${formatDateMsk(date)} ${formatTimeMsk(date)}` }
 
+const WEEKDAYS_RU = ['воскресенье','понедельник','вторник','среда','четверг','пятница','суббота']
+export function formatWeekdayMsk(date: Date | string): string {
+  const d = new Date(date)
+  const msk = toMskDate(d)
+  return WEEKDAYS_RU[msk.getUTCDay()] || ''
+}
+export function formatTimeWithWeekdayMsk(date: Date | string): string {
+  return `${formatWeekdayMsk(date)} (${formatTimeMsk(date)})`
+}
+
 export function pluralZanyatie(n: number): string {
   const mod10 = n % 10; const mod100 = n % 100
   if (mod10 === 1 && mod100 !== 11) return 'занятие'

@@ -25,19 +25,25 @@ export async function POST() {
 
   try {
     const payload = JSON.stringify({
-      title: 'Logoped-krd.ru',
+      title: 'My Logoped',
       body: 'Тестовое уведомление',
-      icon: '/icons/icon-512.png',
-      badge: '/icons/icon-192.png',
-      data: { url: '/' },
+      // keep minimal; SW will default badge/icon if absent
+      url: '/',
+      tag: 'test',
     })
-    await webpush.sendNotification({
+    const res = await webpush.sendNotification({
       endpoint: sub.endpoint,
       keys: { p256dh: sub.p256dh, auth: sub.auth },
     } as any, payload)
     return NextResponse.json({ ok: true })
-  } catch (e) {
+  } catch (e: any) {
+    const statusCode = (e && typeof e.statusCode === 'number') ? e.statusCode : undefined
+    const body = (e && typeof e.body === 'string') ? e.body : undefined
+    // Clean up invalid subscriptions
+    if (statusCode === 404 || statusCode === 410) {
+      try { await prisma.webPushSubscription.delete({ where: { endpoint: sub.endpoint } }) } catch {}
+    }
     const details = e instanceof Error ? e.message : String(e)
-    return NextResponse.json({ error: 'PUSH_SEND_FAILED', details }, { status: 500 })
+    return NextResponse.json({ error: 'PUSH_SEND_FAILED', statusCode, body, details }, { status: 500 })
   }
 }

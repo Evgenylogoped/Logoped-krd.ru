@@ -7,17 +7,43 @@ export default function AdminBroadcast() {
   const [url, setUrl] = React.useState('/')
   const [role, setRole] = React.useState('')
   const [city, setCity] = React.useState('')
-  const [recipients, setRecipients] = React.useState('')
+  const [q, setQ] = React.useState('')
+  const [sendAll, setSendAll] = React.useState(false)
+  const [found, setFound] = React.useState<{ id: string; name?: string; email?: string; phone?: string }[]>([])
+  const [selectedIds, setSelectedIds] = React.useState<string[]>([])
   const [busy, setBusy] = React.useState(false)
   const [res, setRes] = React.useState<string>('')
 
+  // Prefill from ?ids=
   React.useEffect(() => {
     try {
       const usp = new URLSearchParams(window.location.search)
       const ids = usp.get('ids')
-      if (ids && !recipients.trim()) setRecipients(ids.split(',').join('\n'))
+      if (ids) setSelectedIds(ids.split(',').map(s=>s.trim()).filter(Boolean))
     } catch {}
   }, [])
+
+  // Debounced search
+  React.useEffect(() => {
+    let t: any
+    if (!sendAll) {
+      t = setTimeout(async () => {
+        try {
+          const p = new URLSearchParams()
+          if (q) p.set('q', q)
+          if (role) p.set('role', role)
+          if (city) p.set('city', city)
+          const r = await fetch('/api/admin/users/search?' + p.toString(), { cache: 'no-store' })
+          const j = await r.json().catch(()=>null)
+          if (Array.isArray(j?.items)) setFound(j.items)
+          else setFound([])
+        } catch { setFound([]) }
+      }, 300)
+    } else {
+      setFound([])
+    }
+    return () => clearTimeout(t)
+  }, [q, role, city, sendAll])
 
   async function send() {
     setBusy(true)
@@ -25,13 +51,7 @@ export default function AdminBroadcast() {
     try {
       const payload: any = { title: title.trim(), body: body.trim(), url: url.trim() || '/' }
       const segment: any = {}
-      // explicit recipients: parse by lines, accept ids or emails (server expects userIds; emails ignored unless server resolves)
-      const raw = recipients.trim()
-      if (raw) {
-        const lines = raw.split(/\r?\n/).map(s=>s.trim()).filter(Boolean)
-        // Only pass as userIds; server filters existence
-        segment.userIds = lines
-      }
+      if (!sendAll && selectedIds.length) segment.userIds = selectedIds
       if (role) segment.role = role
       if (city) segment.city = city.trim()
       if (Object.keys(segment).length) payload.segment = segment
@@ -42,9 +62,7 @@ export default function AdminBroadcast() {
       })
       const j = await r.json().catch(()=>null)
       if (r.ok) setRes(`Отправлено в очередь: ${j?.enqueued ?? '?'} пользователей`)
-      else setRes(`Ошибка: ${j?.error || r.status}`)
-    } catch (e) {
-      setRes(String(e))
+      else setRes(j?.error || 'Ошибка отправки')
     } finally {
       setBusy(false)
     }
@@ -67,11 +85,45 @@ export default function AdminBroadcast() {
         <span className="text-sm">Текст</span>
         <textarea className="textarea" value={body} onChange={e=>setBody(e.target.value)} rows={3} />
       </label>
-      <label className="grid gap-1">
-        <span className="text-sm">Получатели (ID по одному на строку) — необязательно</span>
-        <textarea className="textarea" value={recipients} onChange={e=>setRecipients(e.target.value)} rows={3} placeholder="userId1\nuserId2" />
-        <span className="text-xs text-muted">Если указаны — отправка только этим пользователям. Иначе используются фильтры ниже или все пользователи с активной подпиской.</span>
-      </label>
+      <div className="grid gap-2">
+        <label className="inline-flex items-center gap-2">
+          <input type="checkbox" className="checkbox" checked={sendAll} onChange={e=>setSendAll(e.target.checked)} />
+          <span>Отправить всем (игнорировать поиск и выбранных)</span>
+        </label>
+        {!sendAll && (
+          <div className="grid gap-2">
+            <div className="grid md:grid-cols-2 gap-2">
+              <label className="grid gap-1">
+                <span className="text-sm">Поиск пользователей (имя/email/телефон)</span>
+                <input className="input" value={q} onChange={e=>setQ(e.target.value)} placeholder="Начните вводить..." />
+              </label>
+              <label className="grid gap-1">
+                <span className="text-sm">Выбрано</span>
+                <div className="min-h-[38px] p-2 border rounded text-sm bg-white/50">
+                  {selectedIds.length ? selectedIds.join(', ') : '—'}
+                </div>
+              </label>
+            </div>
+            <div className="grid gap-1">
+              <span className="text-sm">Результаты поиска</span>
+              <div className="max-h-56 overflow-auto border rounded divide-y bg-white">
+                {found.length === 0 && <div className="p-2 text-sm text-muted">Нет результатов</div>}
+                {found.map(u => (
+                  <label key={u.id} className="flex items-center gap-2 p-2">
+                    <input type="checkbox" className="checkbox" checked={selectedIds.includes(u.id)} onChange={e=>{
+                      setSelectedIds(prev => e.target.checked ? [...new Set([...prev, u.id])] : prev.filter(x=>x!==u.id))
+                    }} />
+                    <div className="text-sm">
+                      <div className="font-medium">{u.name || u.email || u.phone || u.id}</div>
+                      <div className="text-xs text-muted">{u.email || ''} {u.phone ? ` · ${u.phone}` : ''}</div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
       <div className="grid md:grid-cols-2 gap-2">
         <label className="grid gap-1">
           <span className="text-sm">Фильтр по роли (необязательно)</span>

@@ -80,7 +80,7 @@ export default function AdminBroadcastV2({ initialUsers = [] as U[] }: { initial
 
   return (
     <div className="rounded border p-3 space-y-2" style={{ background: 'var(--card-bg)' }}>
-      <div className="font-semibold">Админ‑рассылка (Web Push) · V2</div>
+      <div className="font-semibold">Админ‑рассылка (Web Push) · V3</div>
       <div className="grid md:grid-cols-2 gap-2">
         <label className="grid gap-1">
           <span className="text-sm">Заголовок</span>
@@ -122,7 +122,7 @@ export default function AdminBroadcastV2({ initialUsers = [] as U[] }: { initial
                   <button type="button" className="btn btn-xs" onClick={()=>setSelectedIds([])}>Снять выбор</button>
                 </div>
               </div>
-              <div className="max-h-56 overflow-auto border rounded divide-y bg-white">
+              <div className="max-h-96 overflow-auto border rounded divide-y bg-white">
                 {err && <div className="p-2 text-xs text-red-600">{err}</div>}
                 {found.length === 0 && !err && <div className="p-2 text-sm text-muted">Нет результатов</div>}
                 {found.map(u => (

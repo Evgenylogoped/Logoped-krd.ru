@@ -75,14 +75,14 @@ export async function POST(req: NextRequest) {
     const tEnd = endOfDayMsk(tomorrow)
     const lessons = await prisma.lesson.findMany({
       where: { startsAt: { gte: new Date(tStart.getTime() - 3*3600*1000), lte: new Date(tEnd.getTime() - 3*3600*1000) } },
-      select: { id: true, startsAt: true, logoped: { select: { firstName: true, lastName: true, middleName: true } }, enrolls: { select: { child: { select: { id: true, firstName: true, lastName: true, parent: { select: { userId: true } } } } } } }
+      select: { id: true, startsAt: true, logoped: { select: { name: true } }, enrolls: { select: { child: { select: { id: true, firstName: true, lastName: true, parent: { select: { userId: true } } } } } } }
     })
     const data: any[] = []
     for (const l of lessons) {
       const child = l.enrolls?.[0]?.child as any
       const parentUserId = child?.parent?.userId as string | undefined
       if (!parentUserId) continue
-      const fioL = `${(l as any).logoped?.lastName||''} ${(((l as any).logoped?.firstName||'')||'').toString().trim().slice(0,1).toUpperCase()}.${(((l as any).logoped?.middleName||'')||'').toString().trim().slice(0,1).toUpperCase() || ''}`.trim()
+      const fioL = String((l as any).logoped?.name || '').trim() || 'логопед'
       const when = formatTimeMsk(l.startsAt as any)
       const body = `У вашего ребёнка завтра занятие с ${fioL} в ${when}`
       data.push({ userId: parentUserId, type: 'BOOKING_UPDATE', payload: { title: 'Напоминание о занятии', body, url: '/parent/schedule' }, scheduledAt: new Date(), attempt: 0 })
@@ -97,14 +97,14 @@ export async function POST(req: NextRequest) {
     const toUtc = new Date(nowUtc.getTime() + 65*60*1000)
     const lessons = await prisma.lesson.findMany({
       where: { startsAt: { gte: fromUtc, lte: toUtc } },
-      select: { id: true, startsAt: true, logoped: { select: { firstName: true, lastName: true, middleName: true } }, enrolls: { select: { child: { select: { id: true, parent: { select: { userId: true } } } } } } }
+      select: { id: true, startsAt: true, logoped: { select: { name: true } }, enrolls: { select: { child: { select: { id: true, parent: { select: { userId: true } } } } } } }
     })
     const data: any[] = []
     for (const l of lessons) {
       const child = l.enrolls?.[0]?.child as any
       const parentUserId = child?.parent?.userId as string | undefined
       if (!parentUserId) continue
-      const fioL = `${(l as any).logoped?.lastName||''} ${(((l as any).logoped?.firstName||'')||'').toString().trim().slice(0,1).toUpperCase()}.${(((l as any).logoped?.middleName||'')||'').toString().trim().slice(0,1).toUpperCase() || ''}`.trim()
+      const fioL = String((l as any).logoped?.name || '').trim() || 'логопед'
       const body = `У вашего ребёнка через 1 час занятие с ${fioL}`
       data.push({ userId: parentUserId, type: 'BOOKING_UPDATE', payload: { title: 'Скоро занятие', body, url: '/parent/schedule' }, scheduledAt: new Date(), attempt: 0 })
     }

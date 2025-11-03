@@ -135,7 +135,7 @@ export async function createParentAndChild(formData: FormData): Promise<void> {
     const parentUser = await (prisma as any).user.findUnique({ where: { id: parent.userId } }).catch(() => null)
     try { if (parentUser?.email) { await sendMail({ to: parentUser.email, subject: 'Создана карточка ребёнка', text: `Ваш логопед добавил карточку ребёнка: ${childLastName} ${childFirstName}.` }) } } catch {}
     revalidatePath('/logoped/clients')
-    redirect('/logoped/clients?op=created')
+    redirect(`/logoped/clients?search=${encodeURIComponent(email)}&op=created`)
   } catch {
     redirect('/logoped/clients?op=fail')
   }

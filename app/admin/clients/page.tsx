@@ -2,6 +2,8 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { bulkDeleteParents, deleteParent, restoreParent, updateParentAdmin, updateChildLogoped, requestTransferByEmail, deleteChild as archiveChild, restoreChild } from './actions'
+import dynamic from 'next/dynamic'
+const AdminBroadcast = dynamic(() => import('@/components/AdminBroadcast'), { ssr: false })
 import VipBadge from '@/components/VipBadge'
 import ConfirmButton from '@/components/ConfirmButton'
 import SelectAll from '@/components/SelectAll'
@@ -127,6 +129,12 @@ export default async function AdminClientsPage({ searchParams }: { searchParams?
         </label>
         <div className="md:col-span-8"><button className="btn">Найти</button></div>
       </form>
+
+      {['ACCOUNTANT','ADMIN','SUPER_ADMIN'].includes(role) && (
+        <div className="mt-2">
+          <AdminBroadcast />
+        </div>
+      )}
 
       <div className="overflow-auto">
         {/* Родители */}

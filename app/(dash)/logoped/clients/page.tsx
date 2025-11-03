@@ -10,6 +10,7 @@ import { startChat } from '../../../chat/actions'
 import { getOrCreateConversation } from '../../../chat/chatService'
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
+export const runtime = 'nodejs'
 
 export default async function LogopedClientsPage({ searchParams }: { searchParams: Promise<{ tab?: string; q?: string; search?: string; op?: string; child?: string; parent?: string; activation?: string; archived?: string; restored?: string; transfer?: string }> }) {
   const sp = await searchParams
@@ -128,24 +129,27 @@ export default async function LogopedClientsPage({ searchParams }: { searchParam
     include: { parent: { include: { user: true } } },
   })
 
-  // Подготовим convId для быстрых ссылок в чат (чтобы не использовать /chat?to=...)
+  // Подготовим convId для быстрых ссылок в чат, но не ломаем SSR при сбое
+  const PREFETCH_CONV = false
   const convByActiveChild: Record<string, string> = {}
   const convByArchivedParent: Record<string, string> = {}
-  // active children → conversation with their parent
-  for (const ch of active as any[]) {
-    const parentUserId = ch.parent?.user?.id
-    if (parentUserId) {
-      const conv = await getOrCreateConversation(currentLogopedId, String(parentUserId), String(ch.id))
-      if (conv?.id) convByActiveChild[String(ch.id)] = String(conv.id)
-    }
-  }
-  // archived children → generic conversation with parent
-  for (const ch of archived as any[]) {
-    const parentUserId = ch.parent?.user?.id
-    if (parentUserId && !convByArchivedParent[parentUserId]) {
-      const conv = await getOrCreateConversation(currentLogopedId, String(parentUserId))
-      if (conv?.id) convByArchivedParent[parentUserId] = String(conv.id)
-    }
+  if (PREFETCH_CONV) {
+    try {
+      for (const ch of active as any[]) {
+        const parentUserId = ch.parent?.user?.id
+        if (parentUserId) {
+          const conv = await getOrCreateConversation(currentLogopedId, String(parentUserId), String(ch.id))
+          if (conv?.id) convByActiveChild[String(ch.id)] = String(conv.id)
+        }
+      }
+      for (const ch of archived as any[]) {
+        const parentUserId = ch.parent?.user?.id
+        if (parentUserId && !convByArchivedParent[parentUserId]) {
+          const conv = await getOrCreateConversation(currentLogopedId, String(parentUserId))
+          if (conv?.id) convByArchivedParent[parentUserId] = String(conv.id)
+        }
+      }
+    } catch {}
   }
 
   return (
