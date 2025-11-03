@@ -110,7 +110,7 @@ export async function POST(req: NextRequest) {
     const balanceSnap = Number((balanceAgg as any)._sum?.amount || 0)
     const cashHeldSnap = Number((cashAgg as any)._sum?.amount || 0)
 
-    await (prisma as any).payoutRequest.create({
+    const created = await (prisma as any).payoutRequest.create({
       data: {
         logopedId: userId,
         balanceAtRequest: balanceSnap,
@@ -119,6 +119,18 @@ export async function POST(req: NextRequest) {
         status: 'PENDING',
       }
     })
+    // Push notify logoped about request created
+    try {
+      await (prisma as any).pushEventQueue.create({
+        data: {
+          userId,
+          type: 'PAYMENT_STATUS',
+          payload: { title: 'Заявка на выплату отправлена', body: 'Мы получили вашу заявку. Ожидайте подтверждения.', url: '/logoped/org-finance' },
+          scheduledAt: new Date(),
+          attempt: 0,
+        }
+      })
+    } catch {}
 
     const proto = req.headers.get('x-forwarded-proto') || 'https'
     const host = req.headers.get('x-forwarded-host') || req.headers.get('host') || 'logoped-krd.ru'

@@ -19,10 +19,16 @@ export async function POST(req: NextRequest) {
       const pr = await (prisma as any).payoutRequest.findUnique({ where: { id: requestId } })
       if (pr && pr.status === 'PENDING' && (role!=='LOGOPED' || pr.logopedId === userId)) {
         await (prisma as any).payoutRequest.update({ where: { id: pr.id }, data: { status: 'CANCELLED' } })
+        try {
+          await (prisma as any).pushEventQueue.create({ data: { userId: pr.logopedId, type: 'PAYMENT_STATUS', payload: { title: 'Заявка на выплату отменена', body: 'Вы отменили заявку на выплату. Её можно оформить снова.', url: '/logoped/org-finance' }, scheduledAt: new Date(), attempt: 0 } })
+        } catch {}
       }
     } else {
       // отменяем все PENDING для этого логопеда, если id не передали
       await (prisma as any).payoutRequest.updateMany({ where: { logopedId: userId, status: 'PENDING' }, data: { status: 'CANCELLED' } })
+      try {
+        await (prisma as any).pushEventQueue.create({ data: { userId, type: 'PAYMENT_STATUS', payload: { title: 'Заявки на выплату отменены', body: 'Все ожидающие заявки отменены.', url: '/logoped/org-finance' }, scheduledAt: new Date(), attempt: 0 } })
+      } catch {}
     }
   } catch {}
   const proto = req.headers.get('x-forwarded-proto') || 'https'
