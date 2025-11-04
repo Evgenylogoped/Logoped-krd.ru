@@ -1,6 +1,6 @@
-const CACHE_NAME = 'logoped-cache-v10';
+const CACHE_NAME = 'logoped-cache-v11';
 const PRECACHE_URLS = [
-  '/',
+  // Keep only static assets; do not precache '/' to avoid accidental homepage responses
   '/manifest.json',
   '/icons/favicon.svg',
   '/icons/favicon-16.png',
@@ -113,23 +113,10 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 2) Навигация (HTML) — сеть с коротким таймаутом, при оффлайне/таймауте отдаём кэшированную главную
+  // 2) Навигация (HTML) — не перехватываем вообще, пусть браузер обрабатывает сам
   const accept = req.headers.get('accept') || '';
   if (req.mode === 'navigate' || accept.includes('text/html')) {
-    event.respondWith((async () => {
-      try {
-        const res = await withTimeout(fetch(req), 3000)
-        if (res === 'SW_TIMEOUT') {
-          const cached = await caches.match('/')
-          return cached || fetch(req)
-        }
-        return res
-      } catch {
-        const cached = await caches.match('/')
-        return cached || new Response('<html><body>Offline</body></html>', { headers: { 'content-type': 'text/html' } })
-      }
-    })());
-    return;
+    return; // allow default network/navigation behavior
   }
 
   // 3) API — всегда сеть

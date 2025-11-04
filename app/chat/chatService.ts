@@ -46,7 +46,9 @@ export async function getOrCreateConversation(me: string, other: string, childId
 export async function countUnreadFor(me: string, convId: string) {
   const meP = await prisma.conversationParticipant.findUnique({ where: { conversationId_userId: { conversationId: convId, userId: me } } })
   const lr = meP?.lastReadAt ? new Date(meP.lastReadAt) : new Date(0)
-  const unread = await prisma.message.count({ where: { conversationId: convId, authorId: { not: me }, createdAt: { gt: lr } } })
+  // Lightweight: only check last message timestamp instead of full COUNT
+  const last = await prisma.message.findFirst({ where: { conversationId: convId, authorId: { not: me } }, orderBy: { createdAt: 'desc' }, select: { createdAt: true } })
+  const unread = last && new Date(last.createdAt).getTime() > lr.getTime() ? 1 : 0
   return unread
 }
 
@@ -87,7 +89,12 @@ export async function listUnifiedConversations(me: string): Promise<UnifiedConve
   const out: UnifiedConversation[] = []
   for (const c of dedup) {
     const other = c.participants.find((p: any)=> p.userId !== me)?.user
-    const unread = await countUnreadFor(me, c.id)
+    // Avoid heavy counts: compute unread as 0/1 by comparing last message time with lastReadAt
+    const meP = c.participants.find((p: any)=> p.userId === me)
+    const lr = meP?.lastReadAt ? new Date(meP.lastReadAt) : new Date(0)
+    const lastMsg = (c as any).messages && (c as any).messages[0]
+    const lastOtherTime = lastMsg && lastMsg.authorId !== me ? new Date(lastMsg.createdAt) : null
+    const unread = lastOtherTime && lastOtherTime > lr ? 1 : 0
     const cid = childIdFromTitle(c.title)
     const kid = cid ? childById.get(cid) : null
     out.push({
