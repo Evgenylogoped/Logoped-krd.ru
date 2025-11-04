@@ -293,7 +293,15 @@ export async function sendMessageAction(params: { conversationId?: string; targe
       const snippet = firstWords(String(body || ''), 5)
       const payload = { title: 'Вам пришло сообщение в чат', body: `от ${authorShort}, ${snippet}${snippet ? '…' : ''} Просмотреть`, url: `/chat?c=${conv.id}` }
       const data = (recips || []).map((r: any) => ({ userId: String(r.userId), type: 'MSG_NEW', payload, scheduledAt: new Date(), attempt: 0 }))
-      if (data.length) { try { await (prisma as any).pushEventQueue.createMany({ data, skipDuplicates: true }) } catch {} }
+      try { await prisma.auditLog.create({ data: { action: 'PUSH_ENQ_MSG_NEW_ATTEMPT', payload: JSON.stringify({ convId: conv.id, recipients: (recips||[]).map((r:any)=>r.userId) }) , actorId: me } }) } catch {}
+      if (data.length) {
+        try {
+          await (prisma as any).pushEventQueue.createMany({ data, skipDuplicates: true })
+          try { await prisma.auditLog.create({ data: { action: 'PUSH_ENQ_MSG_NEW_OK', payload: JSON.stringify({ convId: conv.id, count: data.length }) , actorId: me } }) } catch {}
+        } catch (e) {
+          try { await prisma.auditLog.create({ data: { action: 'PUSH_ENQ_MSG_NEW_ERR', payload: String((e as any)?.message||e||'error') , actorId: me } }) } catch {}
+        }
+      }
       // best-effort: trigger dispatcher
       try {
         const cronKey = (process.env.CRON_PUSH_KEY || '').trim()
