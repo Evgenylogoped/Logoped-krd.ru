@@ -1,4 +1,4 @@
-const CACHE_NAME = 'logoped-cache-v9';
+const CACHE_NAME = 'logoped-cache-v10';
 const PRECACHE_URLS = [
   '/',
   '/manifest.json',
@@ -87,11 +87,25 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+function withTimeout(promise, ms) {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => resolve('SW_TIMEOUT'), ms)
+    promise.then((v) => { clearTimeout(t); resolve(v) }).catch((e) => { clearTimeout(t); reject(e) })
+  })
+}
+
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
+
+  // 0) Никогда не перехватываем SSE (Server-Sent Events)
+  const acceptAll = req.headers.get('accept') || ''
+  if (acceptAll.includes('text/event-stream') || url.pathname.startsWith('/events')) {
+    event.respondWith(fetch(req))
+    return
+  }
 
   // 1) Никогда не кэшируем next-чонки и манифесты бандлов — всегда сеть
   if (url.pathname.startsWith('/_next/')) {
@@ -99,12 +113,22 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 2) Навигация (HTML) — сеть, при оффлайне отдаём оффлайн-страницу
+  // 2) Навигация (HTML) — сеть с коротким таймаутом, при оффлайне/таймауте отдаём кэшированную главную
   const accept = req.headers.get('accept') || '';
   if (req.mode === 'navigate' || accept.includes('text/html')) {
-    event.respondWith(
-      fetch(req).catch(() => caches.match('/'))
-    );
+    event.respondWith((async () => {
+      try {
+        const res = await withTimeout(fetch(req), 3000)
+        if (res === 'SW_TIMEOUT') {
+          const cached = await caches.match('/')
+          return cached || fetch(req)
+        }
+        return res
+      } catch {
+        const cached = await caches.match('/')
+        return cached || new Response('<html><body>Offline</body></html>', { headers: { 'content-type': 'text/html' } })
+      }
+    })());
     return;
   }
 
@@ -114,15 +138,17 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 4) Для статики (иконки, изображения и т.п.) — cache-first
+  // 4) Для статики (иконки, изображения и т.п.) — cache-first с догрузкой из сети с таймаутом
   event.respondWith(
     caches.match(req).then((cached) => {
       if (cached) return cached;
-      return fetch(req)
+      return withTimeout(fetch(req), 3000)
         .then((res) => {
-          const resClone = res.clone();
+          if (res === 'SW_TIMEOUT') return caches.match('/')
+          const real = res
+          const resClone = real.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(req, resClone)).catch(()=>{});
-          return res;
+          return real;
         })
         .catch(() => caches.match('/'));
     })
