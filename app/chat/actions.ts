@@ -1,5 +1,6 @@
 "use server"
 import { prisma } from '@/lib/prisma'
+import { formatFioShort, firstWords } from '@/lib/pushText'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { getUserPlan, getLimits } from '@/lib/subscriptions'
@@ -284,6 +285,24 @@ export async function sendMessageAction(params: { conversationId?: string; targe
     const msg = await prisma.message.create({ data: { conversationId: conv.id, authorId: me, body, replyToId: replyToId || null, type: type || 'TEXT', attachmentUrl: attachmentUrl || null } })
     await prisma.conversation.update({ where: { id: conv.id }, data: { updatedAt: new Date() } })
     await prisma.conversationParticipant.update({ where: { conversationId_userId: { conversationId: conv.id, userId: me } }, data: { lastReadAt: new Date() } })
+    // Enqueue push for other participants (like /api/chat/send)
+    try {
+      const recips = await (prisma as any).conversationParticipant.findMany({ where: { conversationId: conv.id, NOT: { userId: me } }, select: { userId: true } })
+      const author = await (prisma as any).user.findUnique({ where: { id: me }, select: { firstName: true, lastName: true, middleName: true, name: true, email: true } })
+      const authorShort = formatFioShort(author as any)
+      const snippet = firstWords(String(body || ''), 5)
+      const payload = { title: 'Вам пришло сообщение в чат', body: `от ${authorShort}, ${snippet}${snippet ? '…' : ''} Просмотреть`, url: `/chat?c=${conv.id}` }
+      const data = (recips || []).map((r: any) => ({ userId: String(r.userId), type: 'MSG_NEW', payload, scheduledAt: new Date(), attempt: 0 }))
+      if (data.length) { try { await (prisma as any).pushEventQueue.createMany({ data, skipDuplicates: true }) } catch {} }
+      // best-effort: trigger dispatcher
+      try {
+        const cronKey = (process.env.CRON_PUSH_KEY || '').trim()
+        const origin = process.env.NEXT_PUBLIC_SITE_URL || process.env.SITE_URL || ''
+        if (cronKey && origin && origin.startsWith('http')) {
+          fetch(`${origin}/api/push/dispatch`, { method: 'POST', headers: { 'X-CRON-KEY': cronKey } }).catch(()=>{})
+        }
+      } catch {}
+    } catch {}
     return {
       id: String(msg.id),
       conversationId: String(msg.conversationId),
