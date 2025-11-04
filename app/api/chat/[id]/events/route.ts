@@ -41,6 +41,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
             },
             orderBy: { createdAt: 'asc' },
             take: 200,
+            select: { id: true, createdAt: true, editedAt: true, deletedAt: true }
           })
           if (msgs.length > 0) {
             let latest = 0
@@ -67,7 +68,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
         } catch (e) {
           // swallow errors, client may reconnect
         }
-      }, 1000)
+      }, 2000)
 
       // heartbeat
       const hb = setInterval(() => {

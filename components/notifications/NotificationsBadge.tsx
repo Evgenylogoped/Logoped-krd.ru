@@ -9,6 +9,11 @@ export default function NotificationsBadge({ className }: { className?: string }
     let stopped = false
     async function load() {
       try {
+        if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+          // вкладка скрыта — переносим запрос
+          timer = setTimeout(load, 45000)
+          return
+        }
         const r = await fetch('/api/badges', { cache: 'no-store' })
         if (r.ok) {
           const j = await r.json()
@@ -17,7 +22,7 @@ export default function NotificationsBadge({ className }: { className?: string }
           setCount(total)
         }
       } catch {}
-      if (!stopped) timer = setTimeout(load, 15000)
+      if (!stopped) timer = setTimeout(load, 45000)
     }
     load()
     return () => { stopped = true; if (timer) clearTimeout(timer) }

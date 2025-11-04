@@ -584,6 +584,8 @@ model Conversation {
   participants ConversationParticipant[]
   messages     Message[]
   settings     ConversationSettings?
+
+  @@index([updatedAt])
 }
 
 model ConversationParticipant {
@@ -598,6 +600,7 @@ model ConversationParticipant {
   state          ConversationParticipantState?
 
   @@id([conversationId, userId])
+  @@index([userId])
 }
 
 model Message {
@@ -616,6 +619,10 @@ model Message {
   conversation   Conversation @relation(fields: [conversationId], references: [id])
   author         User         @relation("UserMessagesAuthored", fields: [authorId], references: [id])
   replies        Message[]    @relation("MessageReply")
+
+  @@index([conversationId, createdAt])
+  @@index([conversationId, authorId, createdAt])
+  @@index([authorId, createdAt])
 }
 
 /// Financial transaction log for full auditability

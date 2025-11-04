@@ -151,7 +151,7 @@ export default function MobileTabBar({ role: roleProp, leaderFlag: leaderFlagPro
               <div className="text-xs text-muted">{sec.title}</div>
               <div className="grid grid-cols-2 gap-2 text-sm">
                 {sec.items.map((m)=> (
-                  <Link key={m.href} href={m.href} className="btn relative" onClick={() => setMoreOpen(false)}>
+                  <Link key={m.href} href={m.href} prefetch={false} className="btn relative" onClick={() => setMoreOpen(false)}>
                     <span>{m.label}</span>
                     {showLeader && m.key==='payouts' && (
                       <span className="absolute top-1 right-2 z-10">

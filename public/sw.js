@@ -119,25 +119,22 @@ self.addEventListener('fetch', (event) => {
     return; // allow default network/navigation behavior
   }
 
-  // 3) API — всегда сеть
-  if (url.pathname.startsWith('/api/')) {
-    event.respondWith(fetch(req).catch(() => new Response(null, { status: 503 })));
-    return;
-  }
-
-  // 4) Для статики (иконки, изображения и т.п.) — cache-first с догрузкой из сети с таймаутом
-  event.respondWith(
-    caches.match(req).then((cached) => {
-      if (cached) return cached;
-      return withTimeout(fetch(req), 3000)
-        .then((res) => {
-          if (res === 'SW_TIMEOUT') return caches.match('/')
+  // 3) Обрабатываем только узкий набор статики: /icons и /screens — cache-first
+  if (url.pathname.startsWith('/icons/') || url.pathname.startsWith('/screens/')) {
+    event.respondWith(
+      caches.match(req).then((cached) => {
+        if (cached) return cached;
+        return withTimeout(fetch(req), 3000).then((res) => {
+          if (res === 'SW_TIMEOUT') throw new Error('timeout')
           const real = res
           const resClone = real.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(req, resClone)).catch(()=>{});
           return real;
         })
-        .catch(() => caches.match('/'));
-    })
-  );
+      })
+    );
+    return;
+  }
+  // 4) Всё остальное — не трогаем
+  return;
 });

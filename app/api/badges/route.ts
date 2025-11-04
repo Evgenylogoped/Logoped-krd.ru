@@ -28,37 +28,45 @@ export async function GET() {
     let unread = 0
 
     if (['LOGOPED','ADMIN','SUPER_ADMIN'].includes((role || '').toString())) {
-      consultIn = await (prisma as any).consultationRequest.count({ where: { subordinateId: userId, status: 'PENDING' } })
-      consultOut = await (prisma as any).consultationRequest.count({ where: { supervisorId: userId, status: 'PENDING' } })
-      parentActivationsPending = await (prisma as any).activationRequest.count({ where: { targetLogopedId: userId, status: 'PENDING' } })
-      parentBookingsActive = await (prisma as any).booking.count({ where: { status: 'ACTIVE', lesson: { logopedId: userId } } })
-      transferPending = await ((prisma as any).transferRequest?.count
-        ? (prisma as any).transferRequest.count({ where: { toLogopedId: userId, status: 'PENDING' } })
-        : Promise.resolve(0))
       const leaderEmail = String((session.user as any).email || '').toLowerCase()
-      orgMembershipsPending = leaderEmail
-        ? await (prisma as any).organizationMembershipRequest.count({ where: { leaderEmail, status: 'PENDING' } })
-        : 0
+      const [ci, co, act, book, transf, orgm] = await Promise.all([
+        (prisma as any).consultationRequest.count({ where: { subordinateId: userId, status: 'PENDING' } }),
+        (prisma as any).consultationRequest.count({ where: { supervisorId: userId, status: 'PENDING' } }),
+        (prisma as any).activationRequest.count({ where: { targetLogopedId: userId, status: 'PENDING' } }),
+        (prisma as any).booking.count({ where: { status: 'ACTIVE', lesson: { logopedId: userId } } }),
+        ((prisma as any).transferRequest?.count
+          ? (prisma as any).transferRequest.count({ where: { toLogopedId: userId, status: 'PENDING' } })
+          : Promise.resolve(0)),
+        leaderEmail
+          ? (prisma as any).organizationMembershipRequest.count({ where: { leaderEmail, status: 'PENDING' } })
+          : Promise.resolve(0),
+      ])
+      consultIn = ci; consultOut = co; parentActivationsPending = act; parentBookingsActive = book; transferPending = transf; orgMembershipsPending = orgm as number
     }
 
-    const convs = await (prisma as any).conversation.findMany({
-      where: { participants: { some: { userId } } },
-      select: {
-        id: true,
-        participants: { where: { userId }, select: { lastReadAt: true } },
-        messages: {
-          where: { authorId: { not: userId } },
-          orderBy: { createdAt: 'desc' },
-          take: 1,
-          select: { createdAt: true }
-        }
-      }
+    // Fast unread calculation using indexes
+    const parts = await (prisma as any).conversationParticipant.findMany({
+      where: { userId },
+      select: { conversationId: true, lastReadAt: true },
     })
-    unread = convs.reduce((acc: number, c: any) => {
-      const lr = c.participants[0]?.lastReadAt ? new Date(c.participants[0].lastReadAt) : new Date(0)
-      const lastOther = c.messages[0]?.createdAt ? new Date(c.messages[0].createdAt) : null
-      return acc + (lastOther && lastOther > lr ? 1 : 0)
-    }, 0)
+    if (parts.length > 0) {
+      const convIds = parts.map((p: any) => p.conversationId)
+      const groups = await (prisma as any).message.groupBy({
+        by: ['conversationId'],
+        where: { conversationId: { in: convIds }, authorId: { not: userId } },
+        _max: { createdAt: true },
+      })
+      const lastByConv = new Map<string, Date>()
+      for (const g of groups) {
+        const d = g._max?.createdAt ? new Date(g._max.createdAt) : null
+        if (d) lastByConv.set(g.conversationId, d)
+      }
+      unread = parts.reduce((acc: number, p: any) => {
+        const lr = p.lastReadAt ? new Date(p.lastReadAt) : new Date(0)
+        const lastOther = lastByConv.get(p.conversationId)
+        return acc + (lastOther && lastOther > lr ? 1 : 0)
+      }, 0)
+    }
 
     const total = consultIn + parentActivationsPending + parentBookingsActive + transferPending + orgMembershipsPending
     return NextResponse.json({

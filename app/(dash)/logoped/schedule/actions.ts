@@ -188,14 +188,21 @@ export async function approveConsultationRequest(formData: FormData): Promise<vo
     child = await prisma.child.create({ data: { parentId: parent.id, lastName: childLastName, firstName: childFirstName, logopedId: subordinateId, isArchived: false } })
   }
   // enroll to lesson
-  await prisma.enrollment.create({ data: { childId: child.id, lessonId: req.lessonId, status: 'ENROLLED' } })
   // mark request approved
   await prisma.consultationRequest.update({ where: { id: requestId }, data: { status: 'APPROVED', respondedAt: new Date() } })
   // notify supervisor and parent
   const sup = await prisma.user.findUnique({ where: { id: req.supervisorId } })
   if (sup?.email) { try { await sendMail({ to: sup.email, subject: 'Заявка на консультацию принята', text: 'Подчинённый принял заявку и создана карточка ребёнка.' }) } catch {} }
-    if (user.email) { try { await sendMail({ to: user.email, subject: 'Создана карточка ребёнка', text: 'Логопед создал карточку и записал на консультацию. Пожалуйста, войдите в личный кабинет.' }) } catch {} }
-    // редирект на карточку ребёнка для возможной правки
+  // push to supervisor
+  try {
+    const when = formatDateTimeMsk((req.lesson as any)?.startsAt || new Date())
+    const me = await prisma.user.findUnique({ where: { id: subordinateId } })
+    const fioLogoped = `${(me?.lastName||'').toString().trim()} ${((me?.firstName||'')||'').toString().trim().slice(0,1).toUpperCase()}.${((me?.middleName||'')||'').toString().trim().slice(0,1).toUpperCase() || ''}`.trim()
+    const body = `Логопед ${fioLogoped} спланировал(а) занятие с ${req.childFirstName} ${req.childLastName} в ${formatTimeWithWeekdayMsk((req.lesson as any)?.startsAt || new Date())}`
+    await (prisma as any).pushEventQueue.create({ data: { userId: req.supervisorId, type: 'BOOKING_UPDATE', payload: { title: 'Консультация подтверждена', body, url: '/logoped/schedule' }, scheduledAt: new Date(), attempt: 0 } })
+  } catch {}
+  if (user.email) { try { await sendMail({ to: user.email, subject: 'Создана карточка ребёнка', text: 'Логопед создал карточку и записал на консультацию. Пожалуйста, войдите в личный кабинет.' }) } catch {} }
+  // редирект на карточку ребёнка для возможной правки
   redirect(`/logoped/child/${child.id}?tab=main&new=1`)
 }
 
@@ -211,6 +218,13 @@ export async function rejectConsultationRequest(formData: FormData): Promise<voi
   try {
     const sup2 = await prisma.user.findUnique({ where: { id: req.supervisorId } })
     if (sup2?.email) { await sendMail({ to: sup2.email, subject: 'Заявка на консультацию отклонена', text: 'Подчинённый отклонил вашу заявку на консультацию.' }) }
+  } catch {}
+  // push to supervisor
+  try {
+    const me = await prisma.user.findUnique({ where: { id: subordinateId } })
+    const fioLogoped = `${(me?.lastName||'').toString().trim()} ${((me?.firstName||'')||'').toString().trim().slice(0,1).toUpperCase()}.${((me?.middleName||'')||'').toString().trim().slice(0,1).toUpperCase() || ''}`.trim()
+    const body = `Подчинённый ${fioLogoped} отклонил вашу заявку на консультацию`
+    await (prisma as any).pushEventQueue.create({ data: { userId: req.supervisorId, type: 'BOOKING_UPDATE', payload: { title: 'Консультация отклонена', body, url: '/logoped/schedule' }, scheduledAt: new Date(), attempt: 0 } })
   } catch {}
   revalidatePath('/logoped/schedule')
   redirect('/logoped/schedule?consult=rejected')
@@ -566,9 +580,10 @@ export async function enrollChildToLesson(formData: FormData): Promise<void> {
         const me = await prisma.user.findUnique({ where: { id: userId }, include: { branch: { include: { company: true } } } })
         const managerId = (me?.branch as any)?.managerId as string | undefined
         const ownerId = (me?.branch as any)?.company?.ownerId as string | undefined
-        const whenFull = lesson ? formatDateTimeMsk(lesson.startsAt as any) : ''
-        const fio = `${me?.lastName||''} ${((me?.firstName||'')||'').toString().trim().slice(0,1).toUpperCase()}.${((me?.middleName||'')||'').toString().trim().slice(0,1).toUpperCase() || ''}`.trim()
-        const body = `Логопед ${fio} запланировал(а) занятие на ${whenFull}`
+        const whenShort = lesson ? formatTimeWithWeekdayMsk(lesson.startsAt as any) : ''
+        const fioLogoped = `${(me?.lastName||'').toString().trim()} ${((me?.firstName||'')||'').toString().trim().slice(0,1).toUpperCase()}.${((me?.middleName||'')||'').toString().trim().slice(0,1).toUpperCase() || ''}`.trim()
+        const childShort = child ? `${(child.firstName||'').toString().trim()} ${((child.lastName||'')||'').toString().trim().slice(0,1).toUpperCase()}.` : 'ребёнок'
+        const body = `Логопед ${fioLogoped} спланировал(а) занятие с ${childShort} в ${whenShort}`
         const targets = [managerId, ownerId].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i && v !== userId) as string[]
         if (targets.length) {
           await (prisma as any).pushEventQueue.createMany({ data: targets.map(t => ({ userId: t, type: 'BOOKING_UPDATE', payload: { title: 'Изменение в расписании подчинённого', body, url: '/logoped/schedule' }, scheduledAt: new Date(), attempt: 0 })) })
