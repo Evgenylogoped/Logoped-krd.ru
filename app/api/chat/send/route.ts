@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
     await (prisma as any).conversation.update({ where: { id: conv.id }, data: { updatedAt: new Date() } })
     try {
       const recips = await (prisma as any).conversationParticipant.findMany({ where: { conversationId: conv.id, NOT: { userId: userId } }, select: { userId: true } })
-      const author = await (prisma as any).user.findUnique({ where: { id: userId }, select: { firstName: true, lastName: true, middleName: true, name: true, email: true } })
+      const author = await (prisma as any).user.findUnique({ where: { id: userId }, select: { name: true, email: true } })
       const authorShort = formatFioShort(author)
       const snippet = firstWords(String(body || ''), 5)
       const payload = { title: 'Вам пришло сообщение в чат', body: `от ${authorShort}, ${snippet}${snippet ? '…' : ''} Просмотреть`, url: `/chat?c=${conv.id}` }
