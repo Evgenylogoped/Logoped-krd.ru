@@ -50,7 +50,11 @@ export async function POST(req: NextRequest) {
       const snippet = firstWords(String(body || ''), 5)
       const payload = { title: 'Вам пришло сообщение в чат', body: `от ${authorShort}, ${snippet}${snippet ? '…' : ''} Просмотреть`, url: `/chat?c=${conv.id}` }
       const data = (recips || []).map((r: any) => ({ userId: String(r.userId), type: 'MSG_NEW', payload, scheduledAt: new Date(), attempt: 0 }))
-      if (data.length) { try { await (prisma as any).pushEventQueue.createMany({ data, skipDuplicates: true }) } catch {} }
+      if (data.length) { 
+        try { await prisma.auditLog.create({ data: { action: 'PUSH_ENQ_MSG_NEW_ATTEMPT', payload: JSON.stringify({ convId: conv.id, recipients: (recips||[]).map((r:any)=>r.userId) }) , actorId: userId } }) } catch {}
+        try { await (prisma as any).pushEventQueue.createMany({ data, skipDuplicates: true }) } catch {}
+        try { await prisma.auditLog.create({ data: { action: 'PUSH_ENQ_MSG_NEW_OK', payload: JSON.stringify({ convId: conv.id, count: data.length }) , actorId: userId } }) } catch {}
+      }
       // best-effort: trigger dispatcher to reduce delay
       try {
         const cronKey = (process.env.CRON_PUSH_KEY || '').trim()
@@ -59,7 +63,9 @@ export async function POST(req: NextRequest) {
           fetch(`${origin}/api/push/dispatch`, { method: 'POST', headers: { 'X-CRON-KEY': cronKey } }).catch(() => {})
         }
       } catch {}
-    } catch {}
+    } catch (e) {
+      try { await prisma.auditLog.create({ data: { action: 'PUSH_ENQ_MSG_NEW_ERR', payload: String((e as any)?.message||e||'error') , actorId: userId } }) } catch {}
+    }
     // mark my lastReadAt (best-effort)
     try { await (prisma as any).conversationParticipant.update({ where: { conversationId_userId: { conversationId: conv.id, userId } }, data: { lastReadAt: new Date() } }) } catch {}
     try { await prisma.auditLog.create({ data: { action: 'CHAT_SEND_API', payload: JSON.stringify({ conversationId: conv.id, userId, len: String(body||'').length }) , actorId: userId } }) } catch {}
