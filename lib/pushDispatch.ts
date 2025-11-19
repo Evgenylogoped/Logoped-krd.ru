@@ -58,7 +58,7 @@ export async function processPushQueue(limit = 50) {
 
       const p = (ev.payload as any) || {}
       const body = (p.title ? (String(p.title)+': ') : '') + (p.body ? String(p.body) : '')
-      const payload = JSON.stringify({ icon: '/icons/icon-512.png', badge: '/icons/badge-mono.svg', title: 'My Logoped', body, url: p.url || '/' })
+      const payload = JSON.stringify({ icon: '/icons/icon-512.png', badge: '/icons/badge-mono.svg', title: p.title || 'My Logoped', body, url: p.url || '/' })
 
       let delivered = 0
       for (const s of subs) {
