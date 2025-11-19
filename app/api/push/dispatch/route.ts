@@ -98,6 +98,7 @@ export async function POST(req: NextRequest) {
         badge: '/icons/badge-mono.svg',
         ...(ev.payload as any),
       })
+      console.log('DEBUG: push payload:', payload)
 
       let delivered = 0
       for (const s of subs) {
