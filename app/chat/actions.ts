@@ -288,8 +288,10 @@ export async function sendMessageAction(params: { conversationId?: string; targe
     // Enqueue push for other participants (like /api/chat/send)
     try {
       const recips = await (prisma as any).conversationParticipant.findMany({ where: { conversationId: conv.id, NOT: { userId: me } }, select: { userId: true } })
-      const author = await (prisma as any).user.findUnique({ where: { id: me }, select: { firstName: true, lastName: true, middleName: true, name: true, email: true } })
+      const author = await (prisma as any).user.findUnique({ where: { id: me }, select: { name: true, email: true } })
+      console.log('DEBUG: author data (server action):', author)
       const authorShort = formatFioShort(author as any)
+      console.log('DEBUG: authorShort (server action):', authorShort)
       const snippet = firstWords(String(body || ''), 5)
       const payload = { title: 'Вам пришло сообщение в чат', body: `от ${authorShort}, ${snippet}${snippet ? '…' : ''} Просмотреть`, url: `/chat?c=${conv.id}` }
       const data = (recips || []).map((r: any) => ({ userId: String(r.userId), type: 'MSG_NEW', payload, scheduledAt: new Date(), attempt: 0 }))
